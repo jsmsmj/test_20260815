@@ -16,8 +16,18 @@ const COLUMN_WIDTH =
 const SAMPLE_ROW_Y = 195;
 const SAMPLE_ROW_HEIGHT = 130;
 const PLATE_ROW_Y = 340;
-const NETA_ROW_Y = 495;
+const NETA_ROW_Y = 485;
 const NETA_ROW_HEIGHT = 95;
+
+// 盛り台だけは横2台の実験レイアウト(お手本・ネタ選択は3列のまま)
+const PLATE_COLUMN_COUNT = 2;
+const PLATE_COLUMN_GAP = 12;
+const PLATE_COLUMN_WIDTH =
+  (BASE_WIDTH - SIDE_MARGIN * 2 - PLATE_COLUMN_GAP * (PLATE_COLUMN_COUNT - 1)) / PLATE_COLUMN_COUNT;
+
+function plateColumnX(index) {
+  return SIDE_MARGIN + index * (PLATE_COLUMN_WIDTH + PLATE_COLUMN_GAP);
+}
 
 // ネタ種類は一時的にトロ・サーモン・エビ(マグロ・イカ・タマゴの画像が用意でき次第差し替え予定)
 const NETA_TYPES = ['toro', 'salmon', 'ebi'];
@@ -88,9 +98,9 @@ function drawImageContain(img, x, y, w, h) {
   ctx.drawImage(img, x + (w - drawW) / 2, y + (h - drawH) / 2, drawW, drawH);
 }
 
-// お手本に並べる仮の握りセット(3列x3段のグリッドで整列。実際の組み合わせ抽選ロジックは未実装)
-const NIGIRI_GRID_COLS = 3;
-const NIGIRI_GRID_ROWS = 3;
+// お手本に並べる仮の握りセット(2段x4列のグリッド。実際の組み合わせ抽選ロジックは未実装)
+const NIGIRI_GRID_COLS = 4;
+const NIGIRI_GRID_ROWS = 2;
 const NIGIRI_GRID_PADDING = 0.02; // box幅に対する内側余白の比率
 const NIGIRI_CELL_FILL = 1.3; // セルに対する握りの占有率(1.0超で隣のセルと重なる)
 
@@ -105,17 +115,7 @@ function drawNigiriPiece(img, centerX, centerY, maxW, maxH) {
   ctx.drawImage(img, centerX - pieceW / 2, centerY - pieceH / 2, pieceW, pieceH);
 }
 
-// お手本・盛り台に表示するネタの配置をボックスごとにランダム生成しておく(1回だけ生成し、以降の再描画でも固定)
-function randomNigiriGrid() {
-  return Array.from(
-    { length: NIGIRI_GRID_ROWS * NIGIRI_GRID_COLS },
-    () => NETA_TYPES[Math.floor(Math.random() * NETA_TYPES.length)]
-  );
-}
-const sampleNigiriGrids = Array.from({ length: COLUMN_COUNT }, randomNigiriGrid);
-const plateNigiriGrids = Array.from({ length: COLUMN_COUNT }, randomNigiriGrid);
-
-// お手本(白い正方形の箱)用: 均等な3x3グリッド。
+// お手本(白い箱)用: 均等な2x4グリッド。
 // 行(奥→手前)・列(左→右)の順に描画するので、左と奥のネタが先に描かれ、右・手前のネタがその上に重なる。
 function drawNigiriSet(x, y, w, h, grid) {
   const padX = w * NIGIRI_GRID_PADDING;
@@ -137,21 +137,28 @@ function drawNigiriSet(x, y, w, h, grid) {
 
 // 盛り台(木製トレー)は奥が狭く手前が広い台形なので、行ごとに幅を変えて台の天板に沿わせる。
 // 配列は奥(上)→手前(下)の順。天板部分(前面の厚み・脚を除いた範囲)にのみ収める。
-const PLATE_ROW_WIDTH_RATIO = [0.80, 0.90, 0.96];
-const PLATE_ROW_Y_RATIO = [0.16, 0.38, 0.60];
-const PLATE_ROW_HEIGHT_RATIO = 0.26;
-const PLATE_CELL_FILL = 1.3;
+// 実験レイアウト: 2台x横広めのトレーに2段x4列で並べる
+const PLATE_GRID_ROWS = 2;
+const PLATE_GRID_COLS = 4;
+const PLATE_ROW_WIDTH_RATIO = [0.78, 0.98];
+const PLATE_ROW_Y_RATIO = [0.28, 0.62];
+const PLATE_ROW_HEIGHT_RATIO = 0.36;
+const PLATE_CELL_FILL = 1.4;
+const PLATE_NIGIRI_Y_OFFSET = -10; // 握り全体を台に対して上にずらすオフセット(px)
+
+// 盛り台画像は全体を表示したまま、縦方向だけ潰して縮小する(横幅は縦横比通り、縦だけ比率を掛けて圧縮)
+const PLATE_IMAGE_SQUASH_RATIO = 0.72;
 
 function drawNigiriOnPlate(x, y, w, h, grid) {
-  for (let row = 0; row < NIGIRI_GRID_ROWS; row++) {
+  for (let row = 0; row < PLATE_GRID_ROWS; row++) {
     const rowWidth = w * PLATE_ROW_WIDTH_RATIO[row];
     const rowX = x + (w - rowWidth) / 2;
-    const cellW = rowWidth / NIGIRI_GRID_COLS;
+    const cellW = rowWidth / PLATE_GRID_COLS;
     const cellH = h * PLATE_ROW_HEIGHT_RATIO;
-    const centerY = y + h * PLATE_ROW_Y_RATIO[row];
+    const centerY = y + h * PLATE_ROW_Y_RATIO[row] + PLATE_NIGIRI_Y_OFFSET;
 
-    for (let col = 0; col < NIGIRI_GRID_COLS; col++) {
-      const img = netaImages[grid[row * NIGIRI_GRID_COLS + col]];
+    for (let col = 0; col < PLATE_GRID_COLS; col++) {
+      const img = netaImages[grid[row * PLATE_GRID_COLS + col]];
       if (!img) continue;
 
       const centerX = rowX + cellW * (col + 0.5);
@@ -160,25 +167,39 @@ function drawNigiriOnPlate(x, y, w, h, grid) {
   }
 }
 
+// 注文(お手本)ごとにネタの配置をランダム生成しておく(1回だけ生成し、以降の再描画でも固定)。
+// お手本と盛り台は同じ注文を表しているので、同じ配置を共有する(グリッドの形も同じ2x4)。
+function randomNigiriGrid(pieceCount) {
+  return Array.from(
+    { length: pieceCount },
+    () => NETA_TYPES[Math.floor(Math.random() * NETA_TYPES.length)]
+  );
+}
+const orderNigiriGrids = Array.from({ length: PLATE_COLUMN_COUNT }, () =>
+  randomNigiriGrid(NIGIRI_GRID_ROWS * NIGIRI_GRID_COLS)
+);
+
 function drawSampleRow() {
-  for (let i = 0; i < COLUMN_COUNT; i++) {
-    const x = columnX(i);
+  for (let i = 0; i < PLATE_COLUMN_COUNT; i++) {
+    const x = plateColumnX(i);
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(x, SAMPLE_ROW_Y, COLUMN_WIDTH, SAMPLE_ROW_HEIGHT);
+    ctx.fillRect(x, SAMPLE_ROW_Y, PLATE_COLUMN_WIDTH, SAMPLE_ROW_HEIGHT);
     ctx.strokeStyle = '#999999';
     ctx.lineWidth = 2;
-    ctx.strokeRect(x, SAMPLE_ROW_Y, COLUMN_WIDTH, SAMPLE_ROW_HEIGHT);
-    drawNigiriSet(x, SAMPLE_ROW_Y, COLUMN_WIDTH, SAMPLE_ROW_HEIGHT, sampleNigiriGrids[i]);
+    ctx.strokeRect(x, SAMPLE_ROW_Y, PLATE_COLUMN_WIDTH, SAMPLE_ROW_HEIGHT);
+    drawNigiriSet(x, SAMPLE_ROW_Y, PLATE_COLUMN_WIDTH, SAMPLE_ROW_HEIGHT, orderNigiriGrids[i]);
   }
 }
 
 function drawPlateRow() {
   if (!moridaiImage) return;
-  const plateHeight = COLUMN_WIDTH * (moridaiImage.height / moridaiImage.width);
-  for (let i = 0; i < COLUMN_COUNT; i++) {
-    const x = columnX(i);
-    ctx.drawImage(moridaiImage, x, PLATE_ROW_Y, COLUMN_WIDTH, plateHeight);
-    drawNigiriOnPlate(x, PLATE_ROW_Y, COLUMN_WIDTH, plateHeight, plateNigiriGrids[i]);
+  // 画像全体を使い、縦方向だけ比率を掛けて押し潰すように縮小する(クロップはしない)
+  const plateHeight =
+    PLATE_COLUMN_WIDTH * (moridaiImage.height / moridaiImage.width) * PLATE_IMAGE_SQUASH_RATIO;
+  for (let i = 0; i < PLATE_COLUMN_COUNT; i++) {
+    const x = plateColumnX(i);
+    ctx.drawImage(moridaiImage, x, PLATE_ROW_Y, PLATE_COLUMN_WIDTH, plateHeight);
+    drawNigiriOnPlate(x, PLATE_ROW_Y, PLATE_COLUMN_WIDTH, plateHeight, orderNigiriGrids[i]);
   }
 }
 
