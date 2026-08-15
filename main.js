@@ -36,7 +36,7 @@ const NETA_SRC = {
   salmon: 'imgs/salmon.png',
   ebi: 'imgs/ebi.png',
 };
-const BG_SRC = 'imgs_ignore/ddc24c3d-e386-4c9d-bd7a-acf1f2776841.png';
+const BG_SRC = 'imgs/ddc24c3d-e386-4c9d-bd7a-acf1f2776841.png';
 const MORIDAI_SRC = 'imgs/moridai.png';
 
 let bgImage = null;
