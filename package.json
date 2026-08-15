@@ -4,5 +4,8 @@
   "private": true,
   "scripts": {
     "start": "node server.js"
+  },
+  "dependencies": {
+    "howler": "^2.2.4"
   }
 }
