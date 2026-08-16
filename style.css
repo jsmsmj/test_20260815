@@ -23,3 +23,37 @@ html, body {
   display: block;
   background: #222;
 }
+
+/* 名前入力(ランキング登録)・タイトルのランキングボタン用。JS側でcanvasの表示位置に合わせて配置・表示する */
+#name-input,
+#name-confirm-btn,
+#title-ranking-btn {
+  position: fixed;
+  display: none;
+  box-sizing: border-box;
+  z-index: 10;
+}
+
+#name-input {
+  font-size: 16px; /* iOSでフォーカス時に画面がズームされるのを防ぐため16px以上を固定 */
+  padding: 0 10px;
+  border: 2px solid #888;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #222222;
+}
+
+#name-confirm-btn,
+#title-ranking-btn {
+  border: none;
+  border-radius: 6px;
+  background: #2ecc71;
+  color: #ffffff;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+#title-ranking-btn {
+  font-size: 14px;
+  background: #4a90d9;
+}

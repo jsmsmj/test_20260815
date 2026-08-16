@@ -77,7 +77,7 @@ const correctEffectImages = [];
 const SOUNDS = {
   correctToro: { src: 'SE/SE05.mp3', volume: 1.0 },
   correctTamago: { src: 'SE/SE06.mp3', volume: 1.0 },
-  correctEbi: { src: 'SE/SE07.mp3', volume: 1.0 },
+  correctEbi: { src: 'SE/SE01.mp3', volume: 1.0 },
   plateComplete: { src: 'SE/SE03.mp3', volume: 1.0 },
   miss: { src: 'SE/SE04.mp3', volume: 1.0 },
   plateNoMissA: { src: 'SE/SE08.mp3', volume: 1.0 },
@@ -125,6 +125,79 @@ function playNoMissPlateSound() {
   playRandomSound(NO_MISS_PLATE_SOUND_NAMES);
 }
 
+// --- ランキング(Cloudflare Worker) ---
+const RANKING_API_BASE = 'https://game-api.ssdp-jun-20260816.workers.dev';
+const GAME_VERSION = '1.0';
+const RANKING_LIMIT = 10;
+const RANKING_IGNORE_DURATION = 1000; // ms, ランキング画面表示直後にキー/タップ入力を無視する時間
+
+const nameInput = document.getElementById('name-input');
+const nameConfirmBtn = document.getElementById('name-confirm-btn');
+const titleRankingBtn = document.getElementById('title-ranking-btn');
+
+// デバイスID(初回のみ生成してlocalStorageに保存)。現時点では送信するだけで、特に活用はしていない。
+function getDeviceId() {
+  let id = localStorage.getItem('deviceId');
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem('deviceId', id);
+  }
+  return id;
+}
+
+function getPlayerName() {
+  return localStorage.getItem('playerName') || '';
+}
+
+function setPlayerName(name) {
+  const trimmed = name.trim().slice(0, 20);
+  localStorage.setItem('playerName', trimmed);
+  return trimmed;
+}
+
+async function submitScore({ score, stages, playTime }) {
+  const res = await fetch(`${RANKING_API_BASE}/api/score`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      deviceId: getDeviceId(),
+      name: getPlayerName() || 'noname',
+      score,
+      stages,
+      playTime,
+      gameVer: GAME_VERSION,
+    }),
+  });
+  if (!res.ok) throw new Error(`submit failed: ${res.status}`);
+  return res.json(); // { ok, id, rank }
+}
+
+async function fetchRanking(limit) {
+  const res = await fetch(`${RANKING_API_BASE}/api/ranking?limit=${limit}`);
+  if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
+  const data = await res.json();
+  return data.ranking;
+}
+
+// canvas上の座標(BASE_WIDTH/BASE_HEIGHT基準)に、実画面上のposition:fixed要素を重ねて配置する
+function positionOverCanvas(el, x, y, w, h) {
+  const rect = canvas.getBoundingClientRect();
+  const scale = rect.width / BASE_WIDTH;
+  el.style.left = `${rect.left + x * scale}px`;
+  el.style.top = `${rect.top + y * scale}px`;
+  el.style.width = `${w * scale}px`;
+  el.style.height = `${h * scale}px`;
+}
+
+function layoutNameEntryElements() {
+  positionOverCanvas(nameInput, BASE_WIDTH / 2 - 110, BASE_HEIGHT / 2 - 20, 150, 40);
+  positionOverCanvas(nameConfirmBtn, BASE_WIDTH / 2 + 50, BASE_HEIGHT / 2 - 20, 60, 40);
+}
+
+function layoutTitleRankingButton() {
+  positionOverCanvas(titleRankingBtn, BASE_WIDTH / 2 - 90, BASE_HEIGHT / 2 + 145, 180, 40);
+}
+
 function loadImage(src) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -149,6 +222,15 @@ function resize() {
 
   // 以降の描画は常に BASE_WIDTH x BASE_HEIGHT の座標系で行える
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  // 名前入力欄・タイトルのランキングボタンはcanvasの上に実HTML要素として重ねているので、
+  // 表示中はサイズ変更に追従させる
+  if (gamePhase === 'nameEntry') {
+    layoutNameEntryElements();
+  }
+  if (gamePhase === 'title') {
+    layoutTitleRankingButton();
+  }
 }
 
 function drawBackground() {
@@ -388,9 +470,10 @@ let transitionOffset = 0; // 現在のスライドオフセット(0 〜 -SLOT_ST
 const STAGE_PLATE_COUNT = 4; // 1ステージで完成させる盛り台数
 const START_IGNORE_DURATION = 500; // タイトル/ゲームオーバー画面で入力を無視する時間(ms)
 
-let gamePhase = 'title'; // 'title' | 'countdown' | 'playing' | 'cleared' | 'gameover'
-let phaseStart = 0; // 現フェーズ(title/countdown/cleared/gameover)が始まった時刻
+let gamePhase = 'title'; // 'title' | 'countdown' | 'playing' | 'cleared' | 'gameover' | 'nameEntry' | 'submitting' | 'ranking'
+let phaseStart = 0; // 現フェーズが始まった時刻
 let stageStartTime = 0; // 'playing'に入った時刻(タイム計測用)
+let sessionStartTime = 0; // タイトルを抜けてゲームを開始した時刻(ランキング送信のplayTime用)
 let stageNumber = 1; // 現在のステージ番号(MISSペナルティの計算に使う)
 let missCount = 0; // このステージのMISS数(ステージ開始でリセット)
 let currentStreak = 0; // 現在のコンボ(ステージ開始・MISSで0にリセット)
@@ -406,7 +489,12 @@ let totalMissCount = 0; // 通算のMISS回数
 let totalNoMissPlates = 0; // 通算のノーミス盛り台数
 let currentNoMissPlateStreak = 0; // 現在の連続ノーミス盛り台数(MISSのあった盛り台で0にリセット)
 let maxNoMissPlateStreak = 0; // 過去最長の連続ノーミス盛り台数
-let gameOverStats = { stage: 0, plates: 0, pieces: 0, miss: 0, maxCombo: 0, noMissPlates: 0, maxNoMissStreak: 0 }; // ゲームオーバー画面表示用
+let gameOverStats = { stage: 0, plates: 0, pieces: 0, miss: 0, maxCombo: 0, noMissPlates: 0, maxNoMissStreak: 0, playTime: 0 }; // ゲームオーバー画面表示用
+
+// --- ランキング送信・表示 ---
+let rankingList = []; // fetchRankingの結果({rank, name, score}の配列)
+let ownRank = null; // 直近の送信でのランキング順位(nullなら未送信/失敗)
+let rankingErrorMessage = ''; // 送信/取得に失敗した場合のメッセージ
 
 // --- 制限時間 ---
 const INITIAL_TIME = 30; // 秒、ゲーム開始時の残り時間
@@ -500,9 +588,12 @@ function generateStageOrders() {
 function startTitle(now) {
   gamePhase = 'title';
   phaseStart = now;
+  layoutTitleRankingButton();
+  titleRankingBtn.style.display = 'block';
 }
 
 function startGame(now) {
+  titleRankingBtn.style.display = 'none';
   stageNumber = 1;
   timeRemaining = INITIAL_TIME;
   maxStreak = 0;
@@ -512,6 +603,7 @@ function startGame(now) {
   totalNoMissPlates = 0;
   currentNoMissPlateStreak = 0;
   maxNoMissPlateStreak = 0;
+  sessionStartTime = now;
   startCountdown(now);
 }
 
@@ -526,7 +618,96 @@ function startGameOver(now) {
     maxCombo: maxStreak,
     noMissPlates: totalNoMissPlates,
     maxNoMissStreak: maxNoMissPlateStreak,
+    playTime: now - sessionStartTime,
   };
+}
+
+function startNameEntry(now) {
+  gamePhase = 'nameEntry';
+  phaseStart = now;
+  nameInput.value = getPlayerName();
+  layoutNameEntryElements();
+  nameInput.style.display = 'block';
+  nameConfirmBtn.style.display = 'block';
+  nameInput.focus();
+}
+
+function hideNameEntryElements() {
+  nameInput.style.display = 'none';
+  nameConfirmBtn.style.display = 'none';
+}
+
+function confirmNameEntry() {
+  if (gamePhase !== 'nameEntry') return;
+  setPlayerName(nameInput.value);
+  hideNameEntryElements();
+  startSubmitting(performance.now());
+}
+
+nameConfirmBtn.addEventListener('click', confirmNameEntry);
+nameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    confirmNameEntry();
+  }
+});
+
+function startSubmitting(now) {
+  gamePhase = 'submitting';
+  phaseStart = now;
+  rankingErrorMessage = '';
+
+  submitScore({
+    score: gameOverStats.pieces,
+    stages: gameOverStats.stage,
+    playTime: Math.round(gameOverStats.playTime),
+  })
+    .then((result) => {
+      ownRank = result.rank;
+      return fetchRanking(RANKING_LIMIT);
+    })
+    .then((list) => {
+      rankingList = list;
+      startRankingScreen(performance.now());
+    })
+    .catch((err) => {
+      console.error('ランキング送信/取得に失敗しました', err);
+      ownRank = null;
+      rankingList = [];
+      rankingErrorMessage = 'ランキングとの通信に失敗しました';
+      startRankingScreen(performance.now());
+    });
+}
+
+// タイトル画面から「ランキングを見る」を押した場合: スコア送信はせず取得だけ行う
+function startViewRankingOnly(now) {
+  gamePhase = 'submitting'; // 表示は送信時と共通(「サーバアクセス中」)
+  phaseStart = now;
+  rankingErrorMessage = '';
+  ownRank = null;
+
+  fetchRanking(RANKING_LIMIT)
+    .then((list) => {
+      rankingList = list;
+      startRankingScreen(performance.now());
+    })
+    .catch((err) => {
+      console.error('ランキング取得に失敗しました', err);
+      rankingList = [];
+      rankingErrorMessage = 'ランキングとの通信に失敗しました';
+      startRankingScreen(performance.now());
+    });
+}
+
+titleRankingBtn.addEventListener('click', () => {
+  if (gamePhase !== 'title') return;
+  titleRankingBtn.style.display = 'none';
+  startViewRankingOnly(performance.now());
+});
+
+function startRankingScreen(now) {
+  gamePhase = 'ranking';
+  phaseStart = now;
 }
 
 function startCountdown(now) {
@@ -714,6 +895,18 @@ function handleScreenInput() {
 
   if (gamePhase === 'gameover') {
     if (now - phaseStart >= START_IGNORE_DURATION) {
+      startNameEntry(now);
+    }
+    return true;
+  }
+
+  if (gamePhase === 'nameEntry' || gamePhase === 'submitting') {
+    // 名前入力欄・OKボタン・送信待ちの間は、タップ/キーで先に進めない
+    return true;
+  }
+
+  if (gamePhase === 'ranking') {
+    if (now - phaseStart >= RANKING_IGNORE_DURATION) {
       startTitle(now);
     }
     return true;
@@ -728,6 +921,7 @@ canvas.addEventListener('pointerdown', (e) => {
 });
 
 window.addEventListener('keydown', (e) => {
+  if (e.target === nameInput) return; // 名前入力中はゲームのキー割り当てを無視する
   if (handleScreenInput()) return;
   const idx = NETA_KEYS.indexOf(e.key.toLowerCase());
   if (idx !== -1) {
@@ -1055,7 +1249,107 @@ function drawGameOverOverlay() {
 
   ctx.font = '16px sans-serif';
   ctx.fillStyle = '#cccccc';
-  ctx.fillText('タップ / キー入力でタイトルへ', BASE_WIDTH / 2, BASE_HEIGHT / 2 + 150);
+  ctx.fillText('タップ / キー入力でランキングへ', BASE_WIDTH / 2, BASE_HEIGHT / 2 + 150);
+  ctx.restore();
+}
+
+// 名前入力画面(実際の入力欄・OKボタンはHTML要素をcanvasの上に重ねて表示している)
+function drawNameEntryOverlay() {
+  if (gamePhase !== 'nameEntry') return;
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+  ctx.fillRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 22px sans-serif';
+  ctx.fillText('ランキングに登録する名前', BASE_WIDTH / 2, BASE_HEIGHT / 2 - 60);
+
+  ctx.font = '14px sans-serif';
+  ctx.fillStyle = '#cccccc';
+  ctx.fillText('(空欄のままでもOK)', BASE_WIDTH / 2, BASE_HEIGHT / 2 - 35);
+  ctx.restore();
+}
+
+function drawSubmittingOverlay() {
+  if (gamePhase !== 'submitting') return;
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+  ctx.fillRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 20px sans-serif';
+  ctx.fillText('サーバアクセス中…', BASE_WIDTH / 2, BASE_HEIGHT / 2);
+  ctx.restore();
+}
+
+function drawRankingOverlay() {
+  if (gamePhase !== 'ranking') return;
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+  ctx.fillRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 24px sans-serif';
+  ctx.fillText('ランキング TOP10', BASE_WIDTH / 2, 62);
+
+  ctx.font = '12px sans-serif';
+  ctx.fillStyle = '#999999';
+  ctx.fillText('※ 各プレイヤーのベストスコアを表示', BASE_WIDTH / 2, 86);
+
+  const startY = 122;
+  const rowHeight = 38;
+
+  if (rankingErrorMessage) {
+    ctx.font = '16px sans-serif';
+    ctx.fillStyle = '#ff8080';
+    ctx.fillText(rankingErrorMessage, BASE_WIDTH / 2, BASE_HEIGHT / 2);
+  } else if (rankingList.length === 0) {
+    ctx.font = '16px sans-serif';
+    ctx.fillStyle = '#cccccc';
+    ctx.fillText('まだ記録がありません', BASE_WIDTH / 2, BASE_HEIGHT / 2);
+  } else {
+    rankingList.forEach((r, i) => {
+      const y = startY + i * rowHeight;
+      const isOwn = ownRank !== null && r.rank === ownRank;
+
+      if (isOwn) {
+        ctx.fillStyle = 'rgba(255, 215, 0, 0.25)';
+        ctx.fillRect(20, y - rowHeight / 2 + 2, BASE_WIDTH - 40, rowHeight - 4);
+      }
+
+      ctx.fillStyle = isOwn ? '#ffd700' : '#ffffff';
+      ctx.font = isOwn ? 'bold 16px sans-serif' : '16px sans-serif';
+
+      ctx.textAlign = 'left';
+      ctx.fillText(`${r.rank}位`, 30, y - 6);
+      ctx.textAlign = 'center';
+      ctx.fillText(r.name || 'noname', BASE_WIDTH / 2, y - 6);
+      ctx.textAlign = 'right';
+      ctx.fillText(`${r.score}貫`, BASE_WIDTH - 30, y - 6);
+
+      ctx.font = '11px sans-serif';
+      ctx.fillStyle = isOwn ? '#e6c200' : '#999999';
+      ctx.textAlign = 'right';
+      ctx.fillText(`${r.plays ?? '-'}回プレイ`, BASE_WIDTH - 30, y + 11);
+    });
+
+    if (ownRank !== null && !rankingList.some((r) => r.rank === ownRank)) {
+      ctx.font = '14px sans-serif';
+      ctx.fillStyle = '#cccccc';
+      ctx.textAlign = 'center';
+      ctx.fillText(`あなたの順位: ${ownRank}位`, BASE_WIDTH / 2, startY + rankingList.length * rowHeight + 24);
+    }
+  }
+
+  ctx.font = '14px sans-serif';
+  ctx.fillStyle = '#cccccc';
+  ctx.textAlign = 'center';
+  ctx.fillText('タップ / キー入力でタイトルへ', BASE_WIDTH / 2, BASE_HEIGHT - 40);
   ctx.restore();
 }
 
@@ -1087,6 +1381,9 @@ function draw() {
   drawClearOverlay();
   drawTitleOverlay();
   drawGameOverOverlay();
+  drawNameEntryOverlay();
+  drawSubmittingOverlay();
+  drawRankingOverlay();
 }
 
 // --- 更新(時間ベース。フレームレートに依存しない) ---
@@ -1100,7 +1397,13 @@ function update(now) {
     missUntil = 0;
   }
 
-  if (gamePhase === 'title' || gamePhase === 'gameover') {
+  if (
+    gamePhase === 'title' ||
+    gamePhase === 'gameover' ||
+    gamePhase === 'nameEntry' ||
+    gamePhase === 'submitting' ||
+    gamePhase === 'ranking'
+  ) {
     return; // 入力待ちのみ、演出やタイマーは進めない
   }
 
