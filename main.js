@@ -69,26 +69,56 @@ const netaImages = {};
 const correctEffectImages = [];
 
 // --- サウンド(Howler.js) ---
-// 正解時: ネタごとに固定のSE(マグロ=SE05, サーモン=SE06, エビ=SE07) / 盛り台完成時: SE03 / MISS: SE04
-const correctSounds = {
-  toro: new Howl({ src: ['SE/SE05.mp3'] }),
-  tamago: new Howl({ src: ['SE/SE06.mp3'] }),
-  ebi: new Howl({ src: ['SE/SE07.mp3'] }),
+// 全SEの定義(ファイルと音量)をここに集約する。鳴らす箇所は名前だけを使って呼び出す。
+const SOUNDS = {
+  correctToro: { src: 'SE/SE05.mp3', volume: 1.0 },
+  correctTamago: { src: 'SE/SE06.mp3', volume: 1.0 },
+  correctEbi: { src: 'SE/SE07.mp3', volume: 1.0 },
+  plateComplete: { src: 'SE/SE03.mp3', volume: 1.0 },
+  miss: { src: 'SE/SE04.mp3', volume: 1.0 },
+  plateNoMissA: { src: 'SE/SE08.mp3', volume: 1.0 },
+  plateNoMissB: { src: 'SE/SE09.mp3', volume: 1.0 },
+  countdownTick: { src: 'SE/SE10.mp3', volume: 1.0 }, // カウントダウン「3」「2」「1」
+  countdownGo: { src: 'SE/SE11.mp3', volume: 1.0 }, // カウントダウン「GO」
+  bgm: { src: 'SE/iwashiro_kokage_biyori.mp3', volume: 0.4, loop: true },
 };
-const completeSound = new Howl({ src: ['SE/SE03.mp3'] });
-const missSound = new Howl({ src: ['SE/SE04.mp3'] });
-const bgm = new Howl({ src: ['SE/iwashiro_kokage_biyori.mp3'], loop: true, volume: 0.4 });
+
+const soundInstances = {};
+for (const [name, def] of Object.entries(SOUNDS)) {
+  soundInstances[name] = new Howl({ src: [def.src], volume: def.volume, loop: !!def.loop });
+}
+
+function playSound(name) {
+  const sound = soundInstances[name];
+  if (sound) sound.play();
+}
+
+// 複数候補からランダムに1つ再生する(例: ノーミス盛り台のSEはA/Bどちらか)
+function playRandomSound(names) {
+  playSound(names[Math.floor(Math.random() * names.length)]);
+}
+
+const CORRECT_SOUND_NAME = {
+  toro: 'correctToro',
+  tamago: 'correctTamago',
+  ebi: 'correctEbi',
+};
+const NO_MISS_PLATE_SOUND_NAMES = ['plateNoMissA', 'plateNoMissB'];
 
 let bgmStarted = false;
 function startBgmOnce() {
   if (bgmStarted) return;
   bgmStarted = true;
-  bgm.play();
+  soundInstances.bgm.play();
 }
 
 function playCorrectSound(type) {
-  const sound = correctSounds[type];
-  if (sound) sound.play();
+  const name = CORRECT_SOUND_NAME[type];
+  if (name) playSound(name);
+}
+
+function playNoMissPlateSound() {
+  playRandomSound(NO_MISS_PLATE_SOUND_NAMES);
 }
 
 function loadImage(src) {
@@ -250,37 +280,86 @@ function playCorrectEffect(now) {
   correctEffectStart = now;
 }
 
-// 正解時の画面シェイク(背景・盛り台・お手本のみ対象。ボタンとタイマーは揺れない)
-const SHAKE_DURATION = 180; // ms
-const SHAKE_MAGNITUDE = 2; // px
-const SHAKE_ROTATION = (1.1 * Math.PI) / 180; // ラジアン(約2度)
-const SHAKE_FREQUENCY = 2; // 揺れの往復回数
-let shakeStart = -Infinity;
+// 画面シェイク(背景・盛り台のみ対象。お手本・ボタン・タイマーは揺れない)。
+// 正解時とMISS時で別々のパラメータ(揺れ幅・回転・時間・周期)を独立して調整できるようにしてある。
+const CORRECT_SHAKE = {
+  duration: 200, // ms
+  magnitude: 2, // px
+  rotation: (1.1 * Math.PI) / 180, // ラジアン
+  frequency: 2, // 揺れの往復回数
+};
+const MISS_SHAKE = {
+  duration: 120, // ms(仮。MISS用に別途調整する想定)
+  magnitude: 10, // px(仮)
+  rotation: (0 * Math.PI) / 180, // ラジアン(仮)
+  frequency: 3, // 揺れの往復回数(仮)
+};
 
-function triggerShake(now) {
-  shakeStart = now;
+let correctShakeStart = -Infinity;
+let missShakeStart = -Infinity;
+
+function triggerCorrectShake(now) {
+  correctShakeStart = now;
 }
 
-// 経過時間から現在のシェイク量(x, y, rotation)を計算する。減衰しながら振動する。
-function getShakeTransform(now) {
-  const elapsed = now - shakeStart;
-  if (elapsed >= SHAKE_DURATION) return { x: 0, y: 0, rotation: 0 };
+function triggerMissShake(now) {
+  missShakeStart = now;
+}
 
-  const t = elapsed / SHAKE_DURATION;
+// 経過時間・開始時刻・プロファイルから現在のシェイク量(x, y, rotation)を計算する。減衰しながら振動する。
+function computeShakeOffset(now, startTime, profile) {
+  const elapsed = now - startTime;
+  if (elapsed >= profile.duration) return { x: 0, y: 0, rotation: 0 };
+
+  const t = elapsed / profile.duration;
   const decay = 1 - t;
-  const angle = t * SHAKE_FREQUENCY * Math.PI * 2;
+  const angle = t * profile.frequency * Math.PI * 2;
   return {
-    x: Math.sin(angle) * SHAKE_MAGNITUDE * decay,
-    y: Math.cos(angle * 1.3) * SHAKE_MAGNITUDE * decay * 0.6,
-    rotation: Math.sin(angle) * SHAKE_ROTATION * decay,
+    x: Math.sin(angle) * profile.magnitude * decay,
+    y: Math.cos(angle * 1.3) * profile.magnitude * decay * 0.6,
+    rotation: Math.sin(angle) * profile.rotation * decay,
   };
 }
 
+// 正解シェイクとMISSシェイクが同時に有効な場合は単純に合算する(通常は同時に起きない)
+function getShakeTransform(now) {
+  const a = computeShakeOffset(now, correctShakeStart, CORRECT_SHAKE);
+  const b = computeShakeOffset(now, missShakeStart, MISS_SHAKE);
+  return {
+    x: a.x + b.x,
+    y: a.y + b.y,
+    rotation: a.rotation + b.rotation,
+  };
+}
+
+// --- 出題難易度調整 ---
+// 3種類目のネタ(NETA_TYPES[2])は、序盤ほど出現重みを下げて「わずかに」登場させ、
+// DIFFICULTY_FULL_RANDOM_STAGEに達したら他と同じ重み(=完全ランダム)にする。
+// ゲームは大体ステージ4くらいで終わる想定なので、ステージ3で完全ランダムになるよう既定値を置いている。
+const DIFFICULTY_THIRD_TYPE_START_WEIGHT = 0.05; // ステージ1での3種類目の重み(1.0が均等)
+const DIFFICULTY_FULL_RANDOM_STAGE = 3; // このステージ以降は重み1.0(完全ランダム)
+
+function getThirdTypeWeight(stage) {
+  if (stage >= DIFFICULTY_FULL_RANDOM_STAGE) return 1;
+  const t = (stage - 1) / (DIFFICULTY_FULL_RANDOM_STAGE - 1);
+  return DIFFICULTY_THIRD_TYPE_START_WEIGHT + (1 - DIFFICULTY_THIRD_TYPE_START_WEIGHT) * t;
+}
+
+// 現在のステージ(stageNumber)の難易度重みに従って、ネタを1つ抽選する
+function weightedRandomNeta() {
+  const thirdWeight = getThirdTypeWeight(stageNumber);
+  const weights = NETA_TYPES.map((_, i) => (i === 2 ? thirdWeight : 1));
+  const total = weights.reduce((sum, w) => sum + w, 0);
+  let r = Math.random() * total;
+  for (let i = 0; i < NETA_TYPES.length; i++) {
+    r -= weights[i];
+    if (r <= 0) return NETA_TYPES[i];
+  }
+  return NETA_TYPES[NETA_TYPES.length - 1];
+}
+
 function randomOrder() {
-  return Array.from(
-    { length: PIECE_COUNT },
-    () => NETA_TYPES[Math.floor(Math.random() * NETA_TYPES.length)]
-  );
+  return Array.from({ length: PIECE_COUNT }, weightedRandomNeta);
 }
 
 // --- ゲーム状態 ---
@@ -327,7 +406,7 @@ let gameOverStats = { stage: 0, plates: 0, pieces: 0, miss: 0, maxCombo: 0, noMi
 
 // --- 制限時間 ---
 const INITIAL_TIME = 30; // 秒、ゲーム開始時の残り時間
-const STAGE_CLEAR_TIME_BONUS = 3; // 秒、ステージクリアで加算
+const STAGE_CLEAR_TIME_BONUS = 2; // 秒、ステージクリアで加算
 const PLATE_NO_MISS_BONUS = 1; // 秒、盛り台1台をノーミスで完成させると加算
 const MISS_TIME_PENALTY_PER_STAGE = 0.5; // 秒、MISS1回のペナルティ = ステージ番号 × この値
 
@@ -341,17 +420,51 @@ let noMissBonusStart = 0; // 「ノーミス +1秒」表示アニメーション
 let noMissBonusUntil = 0; // この時刻(ms)まで表示
 
 const COUNTDOWN_STEPS = [
-  { label: 'ステージ開始!', duration: 500 },
-  { label: '3', duration: 400 },
-  { label: '2', duration: 300 },
-  { label: '1', duration: 200 },
-  { label: 'GO', duration: 200 },
+  { label: 'ステージ開始!', duration: 500, sound: null },
+  { label: '3', duration: 400, sound: 'countdownTick' },
+  { label: '2', duration: 300, sound: 'countdownTick' },
+  { label: '1', duration: 200, sound: 'countdownTick' },
+  { label: 'GO', duration: 200, sound: 'countdownGo' },
 ];
 const COUNTDOWN_TOTAL_DURATION = COUNTDOWN_STEPS.reduce((sum, s) => sum + s.duration, 0);
+let lastCountdownStepIndex = -1; // 直近で音を鳴らしたステップのインデックス(ステップが変わった瞬間だけ鳴らす)
+
+function getCountdownStepIndex(elapsed) {
+  let acc = 0;
+  for (let i = 0; i < COUNTDOWN_STEPS.length; i++) {
+    acc += COUNTDOWN_STEPS[i].duration;
+    if (elapsed < acc) return i;
+  }
+  return COUNTDOWN_STEPS.length - 1;
+}
+
+// 決まった組み合わせのお手本(名前 + 8貫分の並び)。ここに追加・編集すれば増減できる。
+const PRESET_ORDERS = [
+  { name: 'マグロづくし', pattern: ['toro','toro','toro','toro','toro','toro','toro','toro'] },
+  { name: 'たまごづくし', pattern: ['tamago','tamago','tamago','tamago','tamago','tamago','tamago','tamago'] },
+  { name: 'エビづくし', pattern: ['ebi','ebi','ebi','ebi','ebi','ebi','ebi','ebi'] },
+  { name: 'なごみ', pattern: ['toro','toro','toro','toro','tamago','tamago','tamago','tamago'] },
+  { name: 'なごみ', pattern: ['tamago','tamago','tamago','tamago','toro','toro','toro','toro'] },
+  { name: 'あかり', pattern: ['toro','toro','toro','toro','ebi','ebi','ebi','ebi'] },
+  { name: 'あかり', pattern: ['ebi','ebi','ebi','ebi','toro','toro','toro','toro'] },
+  { name: 'エビたま', pattern: ['ebi','tamago','ebi','tamago','ebi','tamago','ebi','tamago'] },
+  { name: 'エビたま', pattern: ['tamago','ebi','tamago','ebi','tamago','ebi','tamago','ebi'] },
+];
+
+let presetOrderRef = null; // このステージでプリセットを割り当てた配列そのもの(参照比較で判定に使う)
+let presetOrderName = ''; // その組み合わせの名前(お手本の右上に表示)
 
 // このステージ分(STAGE_PLATE_COUNT枚)の盛り台をあらかじめ確定させ、表示用の3枠にセットする
 function generateStageOrders() {
   stageOrders = Array.from({ length: STAGE_PLATE_COUNT }, randomOrder);
+
+  // このステージのどこか1枚を、決まった組み合わせ(プリセット)に差し替える
+  const presetIndex = Math.floor(Math.random() * STAGE_PLATE_COUNT);
+  const preset = PRESET_ORDERS[Math.floor(Math.random() * PRESET_ORDERS.length)];
+  stageOrders[presetIndex] = [...preset.pattern];
+  presetOrderRef = stageOrders[presetIndex];
+  presetOrderName = preset.name;
+
   nextOrderIndex = Math.min(3, STAGE_PLATE_COUNT);
   orders = [stageOrders[0] ?? null, stageOrders[1] ?? null, stageOrders[2] ?? null];
 }
@@ -391,6 +504,7 @@ function startGameOver(now) {
 function startCountdown(now) {
   gamePhase = 'countdown';
   phaseStart = now;
+  lastCountdownStepIndex = -1; // カウントダウンSE用(ステップが変わった瞬間だけ鳴らす)
 
   // 前のステージの状態(特にスライド演出を強制キャンセルした場合の取りこぼし)を
   // 必ずここでクリアしてから新しいステージを組み立てる
@@ -432,10 +546,11 @@ function startTransition(now) {
   transitionStart = now;
   showGood = true;
   nextProgress = 0;
-  completeSound.play();
+  playSound('plateComplete');
 
   // 今完成した盛り台がノーミスならボーナス。判定後、次の盛り台用にリセットする
   if (!plateMissed) {
+    playNoMissPlateSound();
     timeRemaining += PLATE_NO_MISS_BONUS;
     noMissPlateCount++;
     totalNoMissPlates++;
@@ -462,7 +577,8 @@ function registerMiss(now) {
   inputLocked = true;
   missStart = now;
   missUntil = now + 300;
-  missSound.play();
+  playSound('miss');
+  triggerMissShake(now);
   missCount++;
   totalMissCount++;
   currentStreak = 0;
@@ -481,7 +597,7 @@ function registerCorrect(now) {
   if (currentStreak > maxStreak) maxStreak = currentStreak;
   totalPiecesMade++;
   playCorrectEffect(now);
-  triggerShake(now);
+  triggerCorrectShake(now);
 }
 
 function attemptNeta(type) {
@@ -614,6 +730,15 @@ function drawSampleSlots() {
     drawNigiriSet(x, SAMPLE_ROW_Y, PLATE_COLUMN_WIDTH, SAMPLE_ROW_HEIGHT, order);
     if (i === activeSlot && activeProgress < PIECE_COUNT) {
       drawNigiriCursor(x, SAMPLE_ROW_Y, PLATE_COLUMN_WIDTH, SAMPLE_ROW_HEIGHT, activeProgress);
+    }
+
+    // 決まった組み合わせのお手本なら、右上に名前を表示する
+    if (order === presetOrderRef) {
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 15px sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText(presetOrderName, x, SAMPLE_ROW_Y - 16);
     }
   }
 }
@@ -759,10 +884,10 @@ function drawNoMissBonusText() {
 
   ctx.save();
   ctx.fillStyle = '#2ecc71';
-  ctx.font = 'bold 18px sans-serif';
+  ctx.font = 'bold 25px sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('ノーミス +1秒', BASE_WIDTH / 2, y);
+  ctx.fillText(`ノーミス +${PLATE_NO_MISS_BONUS}秒`, BASE_WIDTH / 2, y);
   ctx.restore();
 }
 
@@ -952,7 +1077,15 @@ function update(now) {
   }
 
   if (gamePhase === 'countdown') {
-    if (now - phaseStart >= COUNTDOWN_TOTAL_DURATION) {
+    const elapsed = now - phaseStart;
+    const stepIndex = getCountdownStepIndex(elapsed);
+    if (stepIndex !== lastCountdownStepIndex) {
+      lastCountdownStepIndex = stepIndex;
+      const sound = COUNTDOWN_STEPS[stepIndex].sound;
+      if (sound) playSound(sound);
+    }
+
+    if (elapsed >= COUNTDOWN_TOTAL_DURATION) {
       startPlayingStage(now);
     }
     return;
@@ -1015,14 +1148,14 @@ document.addEventListener('visibilitychange', () => {
       cancelAnimationFrame(animationFrameId);
       animationFrameId = null;
     }
-    if (bgmStarted) bgm.pause();
+    if (bgmStarted) soundInstances.bgm.pause();
   } else {
     if (animationFrameId === null) {
       // 非表示だった間の経過時間をdt計算に含めない(タイマーが一気に減るのを防ぐ)
       lastFrameTime = null;
       animationFrameId = requestAnimationFrame(loop);
     }
-    if (bgmStarted) bgm.play();
+    if (bgmStarted) soundInstances.bgm.play();
   }
 });
 
