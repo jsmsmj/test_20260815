@@ -35,25 +35,44 @@ function columnX(index) {
 }
 
 // ネタ種類は一時的にトロ・サーモン・エビ(マグロ・イカ・タマゴの画像が用意でき次第差し替え予定)
-const NETA_TYPES = ['toro', 'salmon', 'ebi'];
+const NETA_TYPES = ['toro', 'tamago', 'ebi'];
 const NETA_KEYS = ['a', 's', 'd']; // PCキー割り当て(ネタの並び順に対応)
+
+// ネタボタンを押した瞬間のフィードバック(少し拡大+ほのかに緑がかった色)
+const NETA_PRESS_FLASH_DURATION = 100; // ms(約2フレーム分の短い演出)
+const NETA_PRESS_SCALE = 1.03;
+let netaButtonPressTime = [0, 0, 0]; // 各ネタボタンを最後に押した時刻
+
+function flashNetaButton(index) {
+  netaButtonPressTime[index] = performance.now();
+}
 const NETA_SRC = {
   toro: 'imgs/toro.png',
-  salmon: 'imgs/salmon.png',
+  tamago: 'imgs/tamago.png',
   ebi: 'imgs/ebi.png',
 };
 const BG_SRC = 'imgs/ddc24c3d-e386-4c9d-bd7a-acf1f2776841_.png';
 const MORIDAI_SRC = 'imgs/moridai.png';
 
+// 正解エフェクト用のパラパラアニメ(5コマ)
+const CORRECT_EFFECT_SRC = [
+  'imgs/ef01.png',
+  'imgs/ef02.png',
+  'imgs/ef03.png',
+  'imgs/ef04.png',
+  'imgs/ef05.png',
+];
+
 let bgImage = null;
 let moridaiImage = null;
 const netaImages = {};
+const correctEffectImages = [];
 
 // --- サウンド(Howler.js) ---
 // 正解時: ネタごとに固定のSE(マグロ=SE05, サーモン=SE06, エビ=SE07) / 盛り台完成時: SE03 / MISS: SE04
 const correctSounds = {
   toro: new Howl({ src: ['SE/SE05.mp3'] }),
-  salmon: new Howl({ src: ['SE/SE06.mp3'] }),
+  tamago: new Howl({ src: ['SE/SE06.mp3'] }),
   ebi: new Howl({ src: ['SE/SE07.mp3'] }),
 };
 const completeSound = new Howl({ src: ['SE/SE03.mp3'] });
@@ -126,7 +145,7 @@ const NIGIRI_GRID_COLS = 4;
 const NIGIRI_GRID_ROWS = 2;
 const NIGIRI_GRID_PADDING = 0.02; // box幅に対する内側余白の比率
 const NIGIRI_CELL_FILL = 1.3; // セルに対する握りの占有率(1.0超で隣のセルと重なる)
-const PIECE_COUNT = NIGIRI_GRID_ROWS * NIGIRI_GRID_COLS; // 1皿分の貫数
+const PIECE_COUNT = NIGIRI_GRID_ROWS * NIGIRI_GRID_COLS; // 1台分の貫数
 
 // 1貫を指定の中心位置・最大サイズで描画する共通処理
 function drawNigiriPiece(img, centerX, centerY, maxW, maxH) {
@@ -188,8 +207,9 @@ const PLATE_NIGIRI_Y_OFFSET = -10; // 握り全体を台に対して上にずら
 // 盛り台画像は全体を表示したまま、縦方向だけ潰して縮小する(横幅は縦横比通り、縦だけ比率を掛けて圧縮)
 const PLATE_IMAGE_SQUASH_RATIO = 0.72;
 
-// revealCount貫目までしか描画しない(ゲーム進行に応じて盛り台に握りが増えていく表現)
-function drawNigiriOnPlate(x, y, w, h, grid, revealCount) {
+// revealCount貫目までしか描画しない(ゲーム進行に応じて盛り台に握りが増えていく表現)。
+// dropIndexに一致する貫だけ、dropOffsetY分だけ上下にずらして描画する(出現アニメ用)。
+function drawNigiriOnPlate(x, y, w, h, grid, revealCount, dropIndex, dropOffsetY) {
   for (let row = 0; row < PLATE_GRID_ROWS; row++) {
     const rowWidth = w * PLATE_ROW_WIDTH_RATIO[row];
     const rowX = x + (w - rowWidth) / 2;
@@ -205,9 +225,55 @@ function drawNigiriOnPlate(x, y, w, h, grid, revealCount) {
       if (!img) continue;
 
       const centerX = rowX + cellW * (col + 0.5);
-      drawNigiriPiece(img, centerX, centerY, cellW * PLATE_CELL_FILL, cellH * PLATE_CELL_FILL);
+      const extraY = pieceIndex === dropIndex ? dropOffsetY : 0;
+      drawNigiriPiece(img, centerX, centerY + extraY, cellW * PLATE_CELL_FILL, cellH * PLATE_CELL_FILL);
     }
   }
+}
+
+// 新しく1貫が盛り台に出現する時の演出(最終位置より10px上から0.1秒かけて落ちて着地する)
+const PIECE_DROP_DURATION = 100; // ms
+const PIECE_DROP_DISTANCE = 10; // px
+let lastPieceRevealSlot = -1; // orders配列でのインデックス(0 or 1)。どの盛り台の貫か
+let lastPieceRevealIndex = -1; // その盛り台の中で何貫目か
+let lastPieceRevealTime = 0;
+
+// 正解時に画面中央で再生するパラパラアニメのエフェクト(5コマ、各コマ2フレーム分)
+const CORRECT_EFFECT_FRAME_DURATION = 30; // ms(2フレーム分の目安)
+const CORRECT_EFFECT_FRAME_COUNT = 5;
+const CORRECT_EFFECT_TOTAL_DURATION = CORRECT_EFFECT_FRAME_DURATION * CORRECT_EFFECT_FRAME_COUNT;
+const CORRECT_EFFECT_OPACITY = 0.9;
+const CORRECT_EFFECT_SIZE = 330; // px(仮。大きさ・位置は後で微調整)
+let correctEffectStart = 0;
+
+function playCorrectEffect(now) {
+  correctEffectStart = now;
+}
+
+// 正解時の画面シェイク(背景・盛り台・お手本のみ対象。ボタンとタイマーは揺れない)
+const SHAKE_DURATION = 180; // ms
+const SHAKE_MAGNITUDE = 2; // px
+const SHAKE_ROTATION = (1.1 * Math.PI) / 180; // ラジアン(約2度)
+const SHAKE_FREQUENCY = 2; // 揺れの往復回数
+let shakeStart = -Infinity;
+
+function triggerShake(now) {
+  shakeStart = now;
+}
+
+// 経過時間から現在のシェイク量(x, y, rotation)を計算する。減衰しながら振動する。
+function getShakeTransform(now) {
+  const elapsed = now - shakeStart;
+  if (elapsed >= SHAKE_DURATION) return { x: 0, y: 0, rotation: 0 };
+
+  const t = elapsed / SHAKE_DURATION;
+  const decay = 1 - t;
+  const angle = t * SHAKE_FREQUENCY * Math.PI * 2;
+  return {
+    x: Math.sin(angle) * SHAKE_MAGNITUDE * decay,
+    y: Math.cos(angle * 1.3) * SHAKE_MAGNITUDE * decay * 0.6,
+    rotation: Math.sin(angle) * SHAKE_ROTATION * decay,
+  };
 }
 
 function randomOrder() {
@@ -220,7 +286,7 @@ function randomOrder() {
 // --- ゲーム状態 ---
 // orders[0] = 進行中(入力対象), orders[1] = 次に控えている(遷移中は入力対象になる), orders[2] = その次(遷移中のみ画面右から見える)
 // ステージの盛り台はSTAGE_PLATE_COUNT枚で打ち止め。それ以上はnullを詰めて「もう出てこない」ことを表す
-let stageOrders = []; // このステージ分(4皿)の内容。ステージ開始時に確定させる
+let stageOrders = []; // このステージ分(4台)の内容。ステージ開始時に確定させる
 let nextOrderIndex = 0; // stageOrders のうち、まだ orders に乗せていない次のインデックス
 let orders = [null, null, null];
 let progress = 0; // orders[0] のうち何貫正解したか
@@ -250,10 +316,19 @@ let platesClearedInStage = 0; // このステージで完成させた盛り台�
 let noMissPlateCount = 0; // このステージでノーミス完成させた盛り台数(ステージ開始でリセット)
 let clearStats = { time: 0, miss: 0, streak: 0 }; // クリア画面表示用に確定した記録
 
+// --- ゲーム全体を通した通算スタッツ(1ゲーム=タイトルからゲームオーバーまで。ステージをまたいでリセットしない) ---
+let totalPlatesCleared = 0; // 通算で完成させた盛り台数
+let totalPiecesMade = 0; // 通算で握った貫数
+let totalMissCount = 0; // 通算のMISS回数
+let totalNoMissPlates = 0; // 通算のノーミス盛り台数
+let currentNoMissPlateStreak = 0; // 現在の連続ノーミス盛り台数(MISSのあった盛り台で0にリセット)
+let maxNoMissPlateStreak = 0; // 過去最長の連続ノーミス盛り台数
+let gameOverStats = { stage: 0, plates: 0, pieces: 0, miss: 0, maxCombo: 0, noMissPlates: 0, maxNoMissStreak: 0 }; // ゲームオーバー画面表示用
+
 // --- 制限時間 ---
-const INITIAL_TIME = 50; // 秒、ゲーム開始時の残り時間
+const INITIAL_TIME = 30; // 秒、ゲーム開始時の残り時間
 const STAGE_CLEAR_TIME_BONUS = 3; // 秒、ステージクリアで加算
-const PLATE_NO_MISS_BONUS = 1; // 秒、盛り台1皿をノーミスで完成させると加算
+const PLATE_NO_MISS_BONUS = 1; // 秒、盛り台1台をノーミスで完成させると加算
 const MISS_TIME_PENALTY_PER_STAGE = 0.5; // 秒、MISS1回のペナルティ = ステージ番号 × この値
 
 let timeRemaining = INITIAL_TIME; // 残り時間(秒)。'playing'中のみ減少する
@@ -266,11 +341,11 @@ let noMissBonusStart = 0; // 「ノーミス +1秒」表示アニメーション
 let noMissBonusUntil = 0; // この時刻(ms)まで表示
 
 const COUNTDOWN_STEPS = [
-  { label: 'ステージ開始!', duration: 1000 },
-  { label: '3', duration: 600 },
-  { label: '2', duration: 600 },
-  { label: '1', duration: 600 },
-  { label: 'GO', duration: 600 },
+  { label: 'ステージ開始!', duration: 500 },
+  { label: '3', duration: 400 },
+  { label: '2', duration: 300 },
+  { label: '1', duration: 200 },
+  { label: 'GO', duration: 200 },
 ];
 const COUNTDOWN_TOTAL_DURATION = COUNTDOWN_STEPS.reduce((sum, s) => sum + s.duration, 0);
 
@@ -289,17 +364,42 @@ function startTitle(now) {
 function startGame(now) {
   stageNumber = 1;
   timeRemaining = INITIAL_TIME;
+  maxStreak = 0;
+  totalPlatesCleared = 0;
+  totalPiecesMade = 0;
+  totalMissCount = 0;
+  totalNoMissPlates = 0;
+  currentNoMissPlateStreak = 0;
+  maxNoMissPlateStreak = 0;
   startCountdown(now);
 }
 
 function startGameOver(now) {
   gamePhase = 'gameover';
   phaseStart = now;
+  gameOverStats = {
+    stage: stageNumber,
+    plates: totalPlatesCleared,
+    pieces: totalPiecesMade,
+    miss: totalMissCount,
+    maxCombo: maxStreak,
+    noMissPlates: totalNoMissPlates,
+    maxNoMissStreak: maxNoMissPlateStreak,
+  };
 }
 
 function startCountdown(now) {
   gamePhase = 'countdown';
   phaseStart = now;
+
+  // 前のステージの状態(特にスライド演出を強制キャンセルした場合の取りこぼし)を
+  // 必ずここでクリアしてから新しいステージを組み立てる
+  transitionActive = false;
+  transitionOffset = 0;
+  showGood = false;
+  progress = 0;
+  nextProgress = 0;
+
   generateStageOrders();
 }
 
@@ -310,8 +410,9 @@ function startPlayingStage(now) {
   currentStreak = 0;
   platesClearedInStage = 0;
   noMissPlateCount = 0;
-  plateMissed = false; // 1皿目のノーミス判定用
+  plateMissed = false; // 1台目のノーミス判定用
   // maxStreak は通算の記録なのでここではリセットしない
+  startBgmOnce(); // 「ステージ開始!→3→2→1→GO」の直後にBGMを鳴らす
 }
 
 function startClearScreen(now) {
@@ -337,12 +438,20 @@ function startTransition(now) {
   if (!plateMissed) {
     timeRemaining += PLATE_NO_MISS_BONUS;
     noMissPlateCount++;
+    totalNoMissPlates++;
+    currentNoMissPlateStreak++;
+    if (currentNoMissPlateStreak > maxNoMissPlateStreak) {
+      maxNoMissPlateStreak = currentNoMissPlateStreak;
+    }
     noMissBonusStart = now;
     noMissBonusUntil = now + NO_MISS_BONUS_DISPLAY_DURATION;
+  } else {
+    currentNoMissPlateStreak = 0;
   }
   plateMissed = false;
 
   platesClearedInStage++;
+  totalPlatesCleared++;
   if (platesClearedInStage >= STAGE_PLATE_COUNT) {
     // フレームアウトが始まると同時にクリア画面を表示する(スライド演出自体は最後まで裏で続く)
     startClearScreen(now);
@@ -355,6 +464,7 @@ function registerMiss(now) {
   missUntil = now + 300;
   missSound.play();
   missCount++;
+  totalMissCount++;
   currentStreak = 0;
   plateMissed = true;
 
@@ -366,9 +476,12 @@ function registerMiss(now) {
   }
 }
 
-function registerCorrect() {
+function registerCorrect(now) {
   currentStreak++;
   if (currentStreak > maxStreak) maxStreak = currentStreak;
+  totalPiecesMade++;
+  playCorrectEffect(now);
+  triggerShake(now);
 }
 
 function attemptNeta(type) {
@@ -385,7 +498,10 @@ function attemptNeta(type) {
     if (type === orders[1][nextProgress]) {
       nextProgress++;
       playCorrectSound(type);
-      registerCorrect();
+      registerCorrect(now);
+      lastPieceRevealSlot = 1;
+      lastPieceRevealIndex = nextProgress - 1;
+      lastPieceRevealTime = now;
     } else {
       registerMiss(now);
     }
@@ -397,7 +513,10 @@ function attemptNeta(type) {
   if (type === orders[0][progress]) {
     progress++;
     playCorrectSound(type);
-    registerCorrect();
+    registerCorrect(now);
+    lastPieceRevealSlot = 0;
+    lastPieceRevealIndex = progress - 1;
+    lastPieceRevealTime = now;
     if (progress >= PIECE_COUNT) {
       startTransition(now);
     }
@@ -422,6 +541,7 @@ function handlePointer(clientX, clientY) {
   for (let i = 0; i < COLUMN_COUNT; i++) {
     const bx = columnX(i);
     if (pos.x >= bx && pos.x <= bx + COLUMN_WIDTH) {
+      flashNetaButton(i);
       attemptNeta(NETA_TYPES[i]);
       return;
     }
@@ -441,8 +561,10 @@ function handleScreenInput() {
   }
 
   if (gamePhase === 'cleared') {
-    stageNumber++;
-    startCountdown(now);
+    if (now - phaseStart >= START_IGNORE_DURATION) {
+      stageNumber++;
+      startCountdown(now); // 前ステージの取りこぼし状態のクリアはstartCountdown側で行う
+    }
     return true;
   }
 
@@ -457,22 +579,22 @@ function handleScreenInput() {
 }
 
 canvas.addEventListener('pointerdown', (e) => {
-  startBgmOnce();
   if (handleScreenInput()) return;
   handlePointer(e.clientX, e.clientY);
 });
 
 window.addEventListener('keydown', (e) => {
-  startBgmOnce();
   if (handleScreenInput()) return;
   const idx = NETA_KEYS.indexOf(e.key.toLowerCase());
   if (idx !== -1) {
+    flashNetaButton(idx);
     attemptNeta(NETA_TYPES[idx]);
   }
 });
 
 // --- 描画 ---
-function drawSampleAndPlateSlots() {
+// お手本(白い箱)の描画。シェイクの対象外なので、揺れる盛り台側とは別関数にしてある。
+function drawSampleSlots() {
   const slotCount = transitionActive ? 3 : PLATE_COLUMN_COUNT;
   // 遷移中は orders[1](次の盛り台)が入力対象、通常時は orders[0] が入力対象
   const activeSlot = transitionActive ? 1 : 0;
@@ -493,35 +615,68 @@ function drawSampleAndPlateSlots() {
     if (i === activeSlot && activeProgress < PIECE_COUNT) {
       drawNigiriCursor(x, SAMPLE_ROW_Y, PLATE_COLUMN_WIDTH, SAMPLE_ROW_HEIGHT, activeProgress);
     }
+  }
+}
 
-    if (moridaiImage) {
-      const plateHeight =
-        PLATE_COLUMN_WIDTH * (moridaiImage.height / moridaiImage.width) * PLATE_IMAGE_SQUASH_RATIO;
-      ctx.drawImage(moridaiImage, x, PLATE_ROW_Y, PLATE_COLUMN_WIDTH, plateHeight);
-      // 遷移中の枠0(退場中)は完成済みなので全貫表示、枠2(次の次)はまだ空
-      let revealCount;
-      if (transitionActive) {
-        revealCount = i === 0 ? PIECE_COUNT : i === 1 ? nextProgress : 0;
-      } else {
-        revealCount = i === 0 ? progress : 0;
-      }
-      drawNigiriOnPlate(x, PLATE_ROW_Y, PLATE_COLUMN_WIDTH, plateHeight, order, revealCount);
+// 盛り台(トレー+盛り付けられた鮨)の描画。こちらはシェイクの対象。
+function drawPlateSlots() {
+  if (!moridaiImage) return;
+
+  const now = performance.now();
+  const slotCount = transitionActive ? 3 : PLATE_COLUMN_COUNT;
+
+  // 直近で追加された1貫の出現アニメ(上から落ちて着地する)
+  const dropT = Math.min((now - lastPieceRevealTime) / PIECE_DROP_DURATION, 1);
+  const dropActive = dropT < 1;
+  const dropEased = 1 - Math.pow(1 - dropT, 3); // ease-out
+  const dropOffsetY = -PIECE_DROP_DISTANCE * (1 - dropEased);
+
+  for (let i = 0; i < slotCount; i++) {
+    const order = orders[i];
+    if (!order) continue; // このステージにはもう盛り台が存在しない
+
+    const x = slotX(i, transitionOffset);
+    const plateHeight =
+      PLATE_COLUMN_WIDTH * (moridaiImage.height / moridaiImage.width) * PLATE_IMAGE_SQUASH_RATIO;
+    ctx.drawImage(moridaiImage, x, PLATE_ROW_Y, PLATE_COLUMN_WIDTH, plateHeight);
+
+    // 遷移中の枠0(退場中)は完成済みなので全貫表示、枠2(次の次)はまだ空
+    let revealCount;
+    if (transitionActive) {
+      revealCount = i === 0 ? PIECE_COUNT : i === 1 ? nextProgress : 0;
+    } else {
+      revealCount = i === 0 ? progress : 0;
     }
+    const dropIndex = dropActive && i === lastPieceRevealSlot ? lastPieceRevealIndex : -1;
+    drawNigiriOnPlate(x, PLATE_ROW_Y, PLATE_COLUMN_WIDTH, plateHeight, order, revealCount, dropIndex, dropOffsetY);
   }
 }
 
 function drawNetaRow() {
+  const now = performance.now();
+
   for (let i = 0; i < COLUMN_COUNT; i++) {
     const x = columnX(i);
-    ctx.fillStyle = '#c9c9c9';
-    ctx.fillRect(x, NETA_ROW_Y, COLUMN_WIDTH, NETA_ROW_HEIGHT);
+    const pressing = now - netaButtonPressTime[i] < NETA_PRESS_FLASH_DURATION;
+
+    // 押した瞬間はボタン中心を基準に少し拡大する
+    let boxX = x, boxY = NETA_ROW_Y, boxW = COLUMN_WIDTH, boxH = NETA_ROW_HEIGHT;
+    if (pressing) {
+      boxW = COLUMN_WIDTH * NETA_PRESS_SCALE;
+      boxH = NETA_ROW_HEIGHT * NETA_PRESS_SCALE;
+      boxX = x + COLUMN_WIDTH / 2 - boxW / 2;
+      boxY = NETA_ROW_Y + NETA_ROW_HEIGHT / 2 - boxH / 2;
+    }
+
+    ctx.fillStyle = pressing ? '#b9dcc4' : '#c9c9c9'; // 押下時はほのかに緑がかった色
+    ctx.fillRect(boxX, boxY, boxW, boxH);
     ctx.strokeStyle = '#8c8c8c';
     ctx.lineWidth = 2;
-    ctx.strokeRect(x, NETA_ROW_Y, COLUMN_WIDTH, NETA_ROW_HEIGHT);
+    ctx.strokeRect(boxX, boxY, boxW, boxH);
 
     const img = netaImages[NETA_TYPES[i]];
     if (img) {
-      drawImageContain(img, x + 8, NETA_ROW_Y + 8, COLUMN_WIDTH - 16, NETA_ROW_HEIGHT - 16);
+      drawImageContain(img, boxX + 8, boxY + 8, boxW - 16, boxH - 16);
     }
 
     // PCキー割り当てのヒント表示
@@ -529,7 +684,7 @@ function drawNetaRow() {
     ctx.font = 'bold 12px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText(NETA_KEYS[i].toUpperCase(), x + COLUMN_WIDTH / 2, NETA_ROW_Y + NETA_ROW_HEIGHT - 6);
+    ctx.fillText(NETA_KEYS[i].toUpperCase(), boxX + boxW / 2, boxY + boxH - 6);
   }
 }
 
@@ -567,6 +722,30 @@ function drawGoodText() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText('GOOD!', MESSAGE_ANCHOR_X + transitionOffset, MESSAGE_ANCHOR_Y);
+  ctx.restore();
+}
+
+// 正解時、画面中央に半透明のパラパラアニメエフェクトを再生する
+function drawCorrectEffect() {
+  const elapsed = performance.now() - correctEffectStart;
+  if (elapsed >= CORRECT_EFFECT_TOTAL_DURATION) return;
+
+  const frameIndex = Math.min(
+    Math.floor(elapsed / CORRECT_EFFECT_FRAME_DURATION),
+    CORRECT_EFFECT_FRAME_COUNT - 1
+  );
+  const img = correctEffectImages[frameIndex];
+  if (!img) return;
+
+  ctx.save();
+  ctx.globalAlpha = CORRECT_EFFECT_OPACITY;
+  ctx.drawImage(
+    img,
+    BASE_WIDTH / 2 - CORRECT_EFFECT_SIZE / 2,
+    BASE_HEIGHT / 2 - CORRECT_EFFECT_SIZE / 2,
+    CORRECT_EFFECT_SIZE,
+    CORRECT_EFFECT_SIZE
+  );
   ctx.restore();
 }
 
@@ -681,7 +860,7 @@ function drawTitleOverlay() {
     'お手本の握り(左上→右下の順)通りに',
     '下のネタボタン(タップ / A・S・D)を押そう',
     '',
-    '盛り台4皿完成でステージクリア',
+    '盛り台4台完成でステージクリア',
     '残り時間が0になるとゲームオーバー',
   ];
   lines.forEach((line, i) => {
@@ -704,11 +883,26 @@ function drawGameOverOverlay() {
   ctx.fillStyle = '#ff4d4d';
   ctx.textAlign = 'center';
   ctx.font = 'bold 36px sans-serif';
-  ctx.fillText('GAME OVER', BASE_WIDTH / 2, BASE_HEIGHT / 2 - 20);
+  ctx.fillText('GAME OVER', BASE_WIDTH / 2, BASE_HEIGHT / 2 - 130);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '17px sans-serif';
+  const statLines = [
+    `到達ステージ: ${gameOverStats.stage}`,
+    `握った貫数: ${gameOverStats.pieces}貫`,
+    `最大コンボ: ${gameOverStats.maxCombo}貫`,
+    `完成した盛り台: ${gameOverStats.plates}台`,
+    `ノーミス盛り台: ${gameOverStats.noMissPlates}台`,
+    `連続ノーミス盛り台: ${gameOverStats.maxNoMissStreak}台`,
+    `MISS回数: ${gameOverStats.miss}回`,
+  ];
+  statLines.forEach((line, i) => {
+    ctx.fillText(line, BASE_WIDTH / 2, BASE_HEIGHT / 2 - 80 + i * 28);
+  });
 
   ctx.font = '16px sans-serif';
   ctx.fillStyle = '#cccccc';
-  ctx.fillText('タップ / キー入力でタイトルへ', BASE_WIDTH / 2, BASE_HEIGHT / 2 + 30);
+  ctx.fillText('タップ / キー入力でタイトルへ', BASE_WIDTH / 2, BASE_HEIGHT / 2 + 150);
   ctx.restore();
 }
 
@@ -717,11 +911,23 @@ function draw() {
   ctx.fillStyle = '#1a1a1a';
   ctx.fillRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
 
+  // 背景・盛り台だけをシェイク対象にする(お手本・ボタン・タイマー・各種テキストは揺らさない)
+  const shake = getShakeTransform(performance.now());
+  ctx.save();
+  ctx.translate(BASE_WIDTH / 2 + shake.x, BASE_HEIGHT / 2 + shake.y);
+  ctx.rotate(shake.rotation);
+  ctx.translate(-BASE_WIDTH / 2, -BASE_HEIGHT / 2);
+
   drawBackground();
-  drawSampleAndPlateSlots();
+  drawPlateSlots();
+
+  ctx.restore();
+
+  drawSampleSlots();
   drawNetaRow();
   drawGoodText();
   drawMissText();
+  drawCorrectEffect();
   drawTimer();
   drawNoMissBonusText();
   drawCountdownOverlay();
@@ -762,7 +968,7 @@ function update(now) {
   }
 
   // 'playing'・'cleared' 共通: スライド演出が進行中なら最後まで裏で再生し続ける
-  // (クリア画面は4皿目のフレームアウト開始と同時に表示されるが、演出自体は最後まで見せる)
+  // (クリア画面は4台目のフレームアウト開始と同時に表示されるが、演出自体は最後まで見せる)
   if (transitionActive) {
     const t = Math.min((now - transitionStart) / TRANSITION_DURATION, 1);
     const eased = 1 - Math.pow(1 - t, 3); // ease-out
@@ -838,4 +1044,5 @@ Promise.all([
   loadImage(BG_SRC).then((img) => { bgImage = img; }),
   loadImage(MORIDAI_SRC).then((img) => { moridaiImage = img; }),
   ...NETA_TYPES.map((type) => loadImage(NETA_SRC[type]).then((img) => { netaImages[type] = img; })),
+  ...CORRECT_EFFECT_SRC.map((src, i) => loadImage(src).then((img) => { correctEffectImages[i] = img; })),
 ]).catch((err) => console.error('画像の読み込みに失敗しました', err));
