@@ -203,18 +203,36 @@ async function fetchMyRank() {
 }
 
 // --- 自己ベスト・順位変動(localStorageで管理) ---
-function getBestScore() {
-  const v = localStorage.getItem('bestScore');
-  return v === null ? 0 : Number(v);
+// GAMEOVER画面のスタッツ表示順・各項目の自己ベストの管理をここに集約する。
+// lower: trueの項目(MISS回数)だけ「少ないほど良い」記録として扱う。
+const GAMEOVER_STAT_DEFS = [
+  { key: 'stage', storageKey: 'bestStage', label: '到達ステージ', unit: '', lower: false },
+  { key: 'pieces', storageKey: 'bestScore', label: '握った貫数', unit: '貫', lower: false },
+  { key: 'maxCombo', storageKey: 'bestMaxCombo', label: '最大コンボ', unit: '貫', lower: false },
+  { key: 'plates', storageKey: 'bestPlates', label: '完成した盛り台', unit: '台', lower: false },
+  { key: 'noMissPlates', storageKey: 'bestNoMissPlates', label: 'ノーミス盛り台', unit: '台', lower: false },
+  { key: 'maxNoMissStreak', storageKey: 'bestNoMissStreak', label: '連続ノーミス盛り台', unit: '台', lower: false },
+  { key: 'miss', storageKey: 'bestMiss', label: 'MISS回数', unit: '回', lower: true },
+];
+
+// 記録の有無はキーの存在で判定する(値0を「記録なし」の意味には使わない)
+function getBestStat(storageKey) {
+  const v = localStorage.getItem(storageKey);
+  return v === null ? null : Number(v);
 }
 
-// 記録を更新していればlocalStorageに保存し、trueを返す
-function updateBestScore(score) {
-  if (score > getBestScore()) {
-    localStorage.setItem('bestScore', String(score));
-    return true;
+// 記録がなければそのまま保存(updatedはfalse)。記録があって上回っていれば保存してupdated:trueを返す
+function updateBestStat(storageKey, value, lower) {
+  const previousBest = getBestStat(storageKey);
+  const hadRecord = previousBest !== null;
+  let updated = false;
+  if (!hadRecord) {
+    localStorage.setItem(storageKey, String(value));
+  } else if (lower ? value < previousBest : value > previousBest) {
+    localStorage.setItem(storageKey, String(value));
+    updated = true;
   }
-  return false;
+  return { hadRecord, previousBest, updated };
 }
 
 // 「直前のプレイ時点の順位」。ゲームをプレイして送信した時だけ更新する(タイトルの定期取得では更新しない)
@@ -400,6 +418,7 @@ const NIGIRI_GRID_ROWS = 2;
 const NIGIRI_GRID_PADDING = 0.02; // box幅に対する内側余白の比率
 const NIGIRI_CELL_FILL = 1.3; // セルに対する握りの占有率(1.0超で隣のセルと重なる)
 const PIECE_COUNT = NIGIRI_GRID_ROWS * NIGIRI_GRID_COLS; // 1台分の貫数
+const SAMPLE_COMPLETED_ALPHA = 0.35; // お手本のうち正解済みの貫を薄く表示する透明度
 
 // 1貫を指定の中心位置・最大サイズで描画する共通処理
 function drawNigiriPiece(img, centerX, centerY, maxW, maxH) {
@@ -414,7 +433,8 @@ function drawNigiriPiece(img, centerX, centerY, maxW, maxH) {
 
 // お手本(白い箱)用: 均等な2x4グリッド。常に全貫を表示する(=正解の見本)。
 // 行(奥→手前)・列(左→右)の順に描画するので、左と奥のネタが先に描かれ、右・手前のネタがその上に重なる。
-function drawNigiriSet(x, y, w, h, grid) {
+// completedCount: 先頭から何貫が正解済みか(その分は薄く表示し、もう見る必要がないことを示す)
+function drawNigiriSet(x, y, w, h, grid, completedCount = 0) {
   const padX = w * NIGIRI_GRID_PADDING;
   const padY = h * NIGIRI_GRID_PADDING;
   const cellW = (w - padX * 2) / NIGIRI_GRID_COLS;
@@ -422,12 +442,21 @@ function drawNigiriSet(x, y, w, h, grid) {
 
   for (let row = 0; row < NIGIRI_GRID_ROWS; row++) {
     for (let col = 0; col < NIGIRI_GRID_COLS; col++) {
-      const img = netaImages[grid[row * NIGIRI_GRID_COLS + col]];
+      const index = row * NIGIRI_GRID_COLS + col;
+      const img = netaImages[grid[index]];
       if (!img) continue;
 
       const centerX = x + padX + cellW * (col + 0.5);
       const centerY = y + padY + cellH * (row + 0.5);
-      drawNigiriPiece(img, centerX, centerY, cellW * NIGIRI_CELL_FILL, cellH * NIGIRI_CELL_FILL);
+
+      if (index < completedCount) {
+        ctx.save();
+        ctx.globalAlpha = SAMPLE_COMPLETED_ALPHA;
+        drawNigiriPiece(img, centerX, centerY, cellW * NIGIRI_CELL_FILL, cellH * NIGIRI_CELL_FILL);
+        ctx.restore();
+      } else {
+        drawNigiriPiece(img, centerX, centerY, cellW * NIGIRI_CELL_FILL, cellH * NIGIRI_CELL_FILL);
+      }
     }
   }
 }
@@ -471,7 +500,8 @@ function drawNigiriOnPlate(x, y, w, h, grid, revealCount, dropIndex, dropOffsetY
     const cellH = h * PLATE_ROW_HEIGHT_RATIO;
     const centerY = y + h * PLATE_ROW_Y_RATIO[row] + PLATE_NIGIRI_Y_OFFSET;
 
-    for (let col = 0; col < PLATE_GRID_COLS; col++) {
+    // 列は右から左の順で描画する(左のネタほど後に描かれ、右のネタの上に重なる)
+    for (let col = PLATE_GRID_COLS - 1; col >= 0; col--) {
       const pieceIndex = row * PLATE_GRID_COLS + col;
       if (pieceIndex >= revealCount) continue;
 
@@ -628,6 +658,11 @@ let totalNoMissPlates = 0; // 通算のノーミス盛り台数
 let currentNoMissPlateStreak = 0; // 現在の連続ノーミス盛り台数(MISSのあった盛り台で0にリセット)
 let maxNoMissPlateStreak = 0; // 過去最長の連続ノーミス盛り台数
 let gameOverStats = { stage: 0, plates: 0, pieces: 0, miss: 0, maxCombo: 0, noMissPlates: 0, maxNoMissStreak: 0, playTime: 0 }; // ゲームオーバー画面表示用
+let gameOverBestResults = {}; // GAMEOVER画面表示用。GAMEOVER_STAT_DEFSの各keyごとの{hadRecord, previousBest, updated}
+
+// --- プレイ中・ステージクリア時の「自己ベスト更新中」表示(握った貫数のみ対象) ---
+let sessionStartBestPieces = null; // ゲーム開始時点での「握った貫数」の自己ベスト(記録なしはnull)
+let piecesBestPopupShownThisGame = false; // このゲームで「自己ベスト更新!」ポップアップを既に出したか(一度だけ)
 
 // --- ランキング送信・表示 ---
 let rankingList = []; // fetchRankingの結果({rank, name, score}の配列)
@@ -659,6 +694,16 @@ const NO_MISS_BONUS_DISPLAY_DURATION = 500; // ms
 const NO_MISS_BONUS_RISE_DISTANCE = 10; // px
 let noMissBonusStart = 0; // 「ノーミス +1秒」表示アニメーションの開始時刻(ms)
 let noMissBonusUntil = 0; // この時刻(ms)まで表示
+
+const NEW_BEST_POPUP_DISPLAY_DURATION = 800; // ms
+const NEW_BEST_POPUP_RISE_DISTANCE = 12; // px
+let newBestPopupStart = 0; // 「自己ベスト更新!」表示アニメーションの開始時刻(ms)
+let newBestPopupUntil = 0; // この時刻(ms)まで表示
+
+function triggerNewBestPopup(now) {
+  newBestPopupStart = now;
+  newBestPopupUntil = now + NEW_BEST_POPUP_DISPLAY_DURATION;
+}
 
 const COUNTDOWN_STEPS = [
   { label: 'ステージ開始!', duration: 500, sound: null },
@@ -759,6 +804,8 @@ function startGame(now) {
   currentNoMissPlateStreak = 0;
   maxNoMissPlateStreak = 0;
   sessionStartTime = now;
+  sessionStartBestPieces = getBestStat('bestScore');
+  piecesBestPopupShownThisGame = false;
   startCountdown(now);
 }
 
@@ -779,7 +826,11 @@ function startGameOver(now) {
   };
 
   // 自己ベストはローカルだけで完結する判定なので、通信結果を待たずに確定させる
-  isNewBest = updateBestScore(gameOverStats.pieces);
+  gameOverBestResults = {};
+  for (const def of GAMEOVER_STAT_DEFS) {
+    gameOverBestResults[def.key] = updateBestStat(def.storageKey, gameOverStats[def.key], def.lower);
+  }
+  isNewBest = gameOverBestResults.pieces.updated;
 
   // 新しいゲームオーバーなので、前回分の状態をリセット
   lastSubmittedId = null;
@@ -1004,6 +1055,7 @@ function startClearScreen(now) {
     miss: missCount,
     streak: maxStreak,
     noMiss: noMissPlateCount,
+    pieces: totalPiecesMade,
   };
 }
 
@@ -1064,6 +1116,12 @@ function registerCorrect(now) {
   totalPiecesMade++;
   playCorrectEffect(now);
   triggerCorrectShake(now);
+
+  // 記録がある状態で自己ベストを上回った瞬間、一度だけポップアップを出す
+  if (!piecesBestPopupShownThisGame && sessionStartBestPieces !== null && totalPiecesMade > sessionStartBestPieces) {
+    piecesBestPopupShownThisGame = true;
+    triggerNewBestPopup(now);
+  }
 }
 
 function attemptNeta(type) {
@@ -1190,10 +1248,16 @@ canvas.addEventListener('pointerdown', (e) => {
   handlePointer(e.clientX, e.clientY);
 });
 
+// ゲームが反応するキーはa/s/d/スペースのみ(SHIFT/CTRL/ALTなどの修飾キーの状態は見ない)。
+// これ以外のキーは、待ち画面を進める判定にもネタ選択判定にも一切使わない。
+const ACCEPTED_KEYS = ['a', 's', 'd', ' '];
+
 window.addEventListener('keydown', (e) => {
   if (e.target === nameInput) return; // 名前入力中はゲームのキー割り当てを無視する
+  const key = e.key.toLowerCase();
+  if (!ACCEPTED_KEYS.includes(key)) return;
   if (handleScreenInput()) return;
-  const idx = NETA_KEYS.indexOf(e.key.toLowerCase());
+  const idx = NETA_KEYS.indexOf(key);
   if (idx !== -1) {
     flashNetaButton(idx);
     attemptNeta(NETA_TYPES[idx]);
@@ -1214,12 +1278,20 @@ function drawSampleSlots() {
 
     const x = slotX(i, transitionOffset);
 
+    // 遷移中のindex 0は、フレームアウト中の完成済み盛り台(全貫正解済み)
+    let completedCount = 0;
+    if (transitionActive && i === 0) {
+      completedCount = PIECE_COUNT;
+    } else if (i === activeSlot) {
+      completedCount = activeProgress;
+    }
+
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(x, SAMPLE_ROW_Y, PLATE_COLUMN_WIDTH, SAMPLE_ROW_HEIGHT);
     ctx.strokeStyle = '#999999';
     ctx.lineWidth = 2;
     ctx.strokeRect(x, SAMPLE_ROW_Y, PLATE_COLUMN_WIDTH, SAMPLE_ROW_HEIGHT);
-    drawNigiriSet(x, SAMPLE_ROW_Y, PLATE_COLUMN_WIDTH, SAMPLE_ROW_HEIGHT, order);
+    drawNigiriSet(x, SAMPLE_ROW_Y, PLATE_COLUMN_WIDTH, SAMPLE_ROW_HEIGHT, order, completedCount);
     if (i === activeSlot && activeProgress < PIECE_COUNT) {
       drawNigiriCursor(x, SAMPLE_ROW_Y, PLATE_COLUMN_WIDTH, SAMPLE_ROW_HEIGHT, activeProgress);
     }
@@ -1383,6 +1455,55 @@ function drawNoMissBonusText() {
   ctx.restore();
 }
 
+// タイマー付近に表示する「自己ベスト更新!」ポップアップ(一度だけ、金色文字、少し上に上がるアニメ)
+function drawNewBestPopup() {
+  const now = performance.now();
+  if (newBestPopupUntil <= now) return;
+
+  const t = Math.min((now - newBestPopupStart) / NEW_BEST_POPUP_DISPLAY_DURATION, 1);
+  const y = TIMER_DISPLAY_Y + 55 - NEW_BEST_POPUP_RISE_DISTANCE * t;
+
+  ctx.save();
+  ctx.fillStyle = '#ffd700';
+  ctx.font = 'bold 20px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('自己ベスト更新!', BASE_WIDTH / 2, y);
+  ctx.restore();
+}
+
+// プレイ中、握った鮨の数を常時表示する。自己ベストを上回っていれば(記録がある場合のみ)同じ行に金色で添える。
+// タイマー付近はポップアップ演出で混みやすいので、お手本のすぐ上に配置する。
+function drawPiecesLiveDisplay() {
+  if (gamePhase !== 'playing') return;
+
+  const y = SAMPLE_ROW_Y - 45;
+  const isUpdating = sessionStartBestPieces !== null && totalPiecesMade > sessionStartBestPieces;
+
+  ctx.save();
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 40px sans-serif';
+
+  if (isUpdating) {
+    const mainText = `${totalPiecesMade}貫  `;
+    const bonusText = '自己ベスト更新中';
+    const mainWidth = ctx.measureText(mainText).width;
+    const bonusWidth = ctx.measureText(bonusText).width;
+    const startX = BASE_WIDTH / 2 - (mainWidth + bonusWidth) / 2;
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(mainText, startX, y);
+    ctx.fillStyle = '#ffd700';
+    ctx.fillText(bonusText, startX + mainWidth, y);
+  } else {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(`${totalPiecesMade}貫`, BASE_WIDTH / 2, y);
+  }
+  ctx.restore();
+}
+
 // ステージ開始前の「ステージ開始! → 3 → 2 → 1 → GO」カウントダウン表示
 function getCountdownLabel(elapsed) {
   let acc = 0;
@@ -1409,7 +1530,7 @@ function drawCountdownOverlay() {
 }
 
 function formatSeconds(ms) {
-  return `${(ms / 1000).toFixed(2)}s`;
+  return `${(ms / 1000).toFixed(2)}秒`;
 }
 
 function drawClearOverlay() {
@@ -1426,17 +1547,25 @@ function drawClearOverlay() {
 
   ctx.font = '20px sans-serif';
   ctx.fillText(`タイム: ${formatSeconds(clearStats.time)}`, BASE_WIDTH / 2, BASE_HEIGHT / 2 - 15);
-  ctx.fillText(`MISS: ${clearStats.miss}`, BASE_WIDTH / 2, BASE_HEIGHT / 2 + 20);
-  ctx.fillText(`連続成功数: ${clearStats.streak}`, BASE_WIDTH / 2, BASE_HEIGHT / 2 + 55);
-  ctx.fillText(`ノーミス盛り台: ${clearStats.noMiss}/${STAGE_PLATE_COUNT}`, BASE_WIDTH / 2, BASE_HEIGHT / 2 + 85);
+  ctx.fillText(`握った鮨の数: ${clearStats.pieces}貫`, BASE_WIDTH / 2, BASE_HEIGHT / 2 + 20);
+  if (sessionStartBestPieces !== null && clearStats.pieces > sessionStartBestPieces) {
+    ctx.font = 'bold 11px sans-serif';
+    ctx.fillStyle = '#ffd700';
+    ctx.fillText('自己ベスト更新中', BASE_WIDTH / 2, BASE_HEIGHT / 2 + 34);
+    ctx.font = '20px sans-serif';
+    ctx.fillStyle = '#ffffff';
+  }
+  ctx.fillText(`MISS: ${clearStats.miss}`, BASE_WIDTH / 2, BASE_HEIGHT / 2 + 55);
+  ctx.fillText(`連続成功数: ${clearStats.streak}`, BASE_WIDTH / 2, BASE_HEIGHT / 2 + 90);
+  ctx.fillText(`ノーミス盛り台: ${clearStats.noMiss}/${STAGE_PLATE_COUNT}`, BASE_WIDTH / 2, BASE_HEIGHT / 2 + 120);
 
   ctx.fillStyle = '#2ecc71';
   ctx.font = 'bold 18px sans-serif';
-  ctx.fillText(`クリアボーナス +${STAGE_CLEAR_TIME_BONUS}秒`, BASE_WIDTH / 2, BASE_HEIGHT / 2 + 115);
+  ctx.fillText(`クリアボーナス +${STAGE_CLEAR_TIME_BONUS}秒`, BASE_WIDTH / 2, BASE_HEIGHT / 2 + 150);
 
   ctx.font = '14px sans-serif';
   ctx.fillStyle = '#cccccc';
-  ctx.fillText('タップ / キー入力で次のステージへ', BASE_WIDTH / 2, BASE_HEIGHT / 2 + 148);
+  ctx.fillText('タップ / キー入力で次のステージへ', BASE_WIDTH / 2, BASE_HEIGHT / 2 + 183);
   ctx.restore();
 }
 
@@ -1464,7 +1593,7 @@ function drawTitleOverlay() {
   if (gamePhase !== 'title') return;
 
   ctx.save();
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
   ctx.fillRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
 
   ctx.fillStyle = '#ffffff';
@@ -1501,7 +1630,7 @@ function drawGameOverOverlay() {
   if (gamePhase !== 'gameover') return;
 
   ctx.save();
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
   ctx.fillRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
 
   ctx.fillStyle = '#ff4d4d';
@@ -1509,19 +1638,33 @@ function drawGameOverOverlay() {
   ctx.font = 'bold 36px sans-serif';
   ctx.fillText('GAME OVER', BASE_WIDTH / 2, BASE_HEIGHT / 2 - 130);
 
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '17px sans-serif';
-  const statLines = [
-    `到達ステージ: ${gameOverStats.stage}`,
-    `握った貫数: ${gameOverStats.pieces}貫`,
-    `最大コンボ: ${gameOverStats.maxCombo}貫`,
-    `完成した盛り台: ${gameOverStats.plates}台`,
-    `ノーミス盛り台: ${gameOverStats.noMissPlates}台`,
-    `連続ノーミス盛り台: ${gameOverStats.maxNoMissStreak}台`,
-    `MISS回数: ${gameOverStats.miss}回`,
-  ];
-  statLines.forEach((line, i) => {
-    ctx.fillText(line, BASE_WIDTH / 2, BASE_HEIGHT / 2 - 80 + i * 28);
+  const rowStartY = BASE_HEIGHT / 2 - 95;
+  const rowStep = 34;
+  GAMEOVER_STAT_DEFS.forEach((def, i) => {
+    const y = rowStartY + i * rowStep;
+    const value = gameOverStats[def.key];
+    const result = gameOverBestResults[def.key];
+
+    ctx.font = '15px sans-serif';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(`${def.label}: ${value}${def.unit}`, BASE_WIDTH / 2, y);
+
+    if (result && result.hadRecord) {
+      ctx.font = 'bold 11px sans-serif';
+      if (result.updated) {
+        const diff = Math.abs(value - result.previousBest);
+        const sign = def.lower ? '-' : '+';
+        ctx.fillStyle = '#ffd700';
+        ctx.fillText(
+          `(自己ベスト ${result.previousBest}${def.unit} → 自己ベスト更新 ${sign}${diff})`,
+          BASE_WIDTH / 2,
+          y + 16
+        );
+      } else {
+        ctx.fillStyle = '#dddddd';
+        ctx.fillText(`(自己ベスト ${result.previousBest}${def.unit})`, BASE_WIDTH / 2, y + 16);
+      }
+    }
   });
 
   ctx.font = '16px sans-serif';
@@ -1535,7 +1678,7 @@ function drawNameEntryOverlay() {
   if (gamePhase !== 'nameEntry') return;
 
   ctx.save();
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
   ctx.fillRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
   ctx.restore();
 }
@@ -1544,7 +1687,7 @@ function drawSubmittingOverlay() {
   if (gamePhase !== 'submitting') return;
 
   ctx.save();
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
   ctx.fillRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
   ctx.fillStyle = '#ffffff';
   ctx.textAlign = 'center';
@@ -1557,7 +1700,7 @@ function drawRankingOverlay() {
   if (gamePhase !== 'ranking') return;
 
   ctx.save();
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
   ctx.fillRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
 
   ctx.fillStyle = '#ffffff';
@@ -1566,7 +1709,7 @@ function drawRankingOverlay() {
   ctx.fillText('ランキング TOP10', BASE_WIDTH / 2, 62);
 
   ctx.font = '12px sans-serif';
-  ctx.fillStyle = '#999999';
+  ctx.fillStyle = '#bbbbbb';
   ctx.fillText('※ 各プレイヤーのベストスコアを表示', BASE_WIDTH / 2, 86);
 
   // 自己ベスト更新・順位変動(どちらもなければ何も表示しない)
@@ -1611,9 +1754,9 @@ function drawRankingOverlay() {
       ctx.fillText(`${r.score}貫`, BASE_WIDTH - 30, y - 6);
 
       ctx.font = '11px sans-serif';
-      ctx.fillStyle = isOwn ? '#e6c200' : '#999999';
+      ctx.fillStyle = isOwn ? '#e6c200' : '#bbbbbb';
       ctx.textAlign = 'right';
-      ctx.fillText(`${r.plays ?? '-'}回プレイ`, BASE_WIDTH - 30, y + 11);
+      ctx.fillText(`${r.plays ?? '-'}回プレイ`, BASE_WIDTH - 30, y + 8);
     });
 
     if (ownRank !== null && !rankingList.some((r) => r.rank === ownRank)) {
@@ -1655,6 +1798,8 @@ function draw() {
   drawCorrectEffect();
   drawTimer();
   drawNoMissBonusText();
+  drawNewBestPopup();
+  drawPiecesLiveDisplay();
   drawCountdownOverlay();
   drawClearOverlay();
   drawTitleOverlay();
@@ -1790,41 +1935,3 @@ Promise.all([
 ]).catch((err) => console.error('画像の読み込みに失敗しました', err));
 
 })();
-
-
-// ============================================================
-//  POST /api/name   { deviceId, name }
-// ============================================================
-
-async function updateName(request, env) {
-  let body;
-  try {
-    body = await request.json();
-  } catch {
-    return json(request, { error: 'invalid json' }, 400);
-  }
-
-  const { deviceId, name } = body;
-
-  if (!UUID_RE.test(String(deviceId ?? ''))) {
-    return json(request, { error: 'invalid deviceId' }, 400);
-  }
-
-  const cleanName = String(name ?? '').trim().slice(0, 20);
-  if (!cleanName) {
-    return json(request, { error: 'empty name' }, 400);
-  }
-
-  const result = await env.DB.prepare(
-    `UPDATE scores SET name = ? WHERE device_id = ?`
-  )
-    .bind(cleanName, deviceId)
-    .run();
-
-  return json(request, {
-    ok: true,
-    name: cleanName,
-    updated: result.meta.changes,
-  });
-}
-
