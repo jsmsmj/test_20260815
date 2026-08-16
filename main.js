@@ -1,3 +1,7 @@
+// グローバルスコープを汚さないよう、ファイル全体を即時関数(IIFE)で囲んでいる。
+// (モジュール分割は将来のタイミングで別途行う)
+(function () {
+
 // スマホ縦持ちを基準とした基準解像度。実機ごとの解像度差はこの比率のまま拡大縮小して吸収する。
 const BASE_WIDTH = 360;
 const BASE_HEIGHT = 600;
@@ -438,17 +442,36 @@ function getCountdownStepIndex(elapsed) {
   return COUNTDOWN_STEPS.length - 1;
 }
 
-// 決まった組み合わせのお手本(名前 + 8貫分の並び)。ここに追加・編集すれば増減できる。
+// 決まった組み合わせのお手本(名前 + 8貫分の並び + 出現条件)。ここに追加・編集すれば増減できる。
+// minThirdWeight: このプリセットを出してよい、3種類目(エビ)の出現重みの下限(getThirdTypeWeightの返り値と比較)。
+// エビに依存しない組み合わせは0(常に出現可)、エビ比率が高いほど大きい値にして序盤に出ないようにする。
 const PRESET_ORDERS = [
-  { name: 'マグロづくし', pattern: ['toro','toro','toro','toro','toro','toro','toro','toro'] },
-  { name: 'たまごづくし', pattern: ['tamago','tamago','tamago','tamago','tamago','tamago','tamago','tamago'] },
-  { name: 'エビづくし', pattern: ['ebi','ebi','ebi','ebi','ebi','ebi','ebi','ebi'] },
-  { name: 'なごみ', pattern: ['toro','toro','toro','toro','tamago','tamago','tamago','tamago'] },
-  { name: 'なごみ', pattern: ['tamago','tamago','tamago','tamago','toro','toro','toro','toro'] },
-  { name: 'あかり', pattern: ['toro','toro','toro','toro','ebi','ebi','ebi','ebi'] },
-  { name: 'あかり', pattern: ['ebi','ebi','ebi','ebi','toro','toro','toro','toro'] },
-  { name: 'エビたま', pattern: ['ebi','tamago','ebi','tamago','ebi','tamago','ebi','tamago'] },
-  { name: 'エビたま', pattern: ['tamago','ebi','tamago','ebi','tamago','ebi','tamago','ebi'] },
+  { name: 'マグロづくし', pattern: ['toro','toro','toro','toro','toro','toro','toro','toro'], minThirdWeight: 0 },
+  { name: 'たまごづくし', pattern: ['tamago','tamago','tamago','tamago','tamago','tamago','tamago','tamago'], minThirdWeight: 0 },
+  { name: 'エビづくし', pattern: ['ebi','ebi','ebi','ebi','ebi','ebi','ebi','ebi'], minThirdWeight: 1 },
+
+  { name: 'マグロづくし?', pattern: ['toro','toro','toro','toro','toro','toro','toro','tamago'], minThirdWeight: 0 },
+  { name: 'マグロづくし?', pattern: ['toro','toro','toro','tamago','toro','toro','toro','toro'], minThirdWeight: 0 },
+  { name: 'マグロづくし?', pattern: ['toro','toro','toro','toro','toro','toro','toro','ebi'], minThirdWeight: 0.25 },
+  { name: 'マグロづくし?', pattern: ['toro','toro','toro','ebi','toro','toro','toro','toro'], minThirdWeight: 0.25 },
+  { name: 'たまごづくし?', pattern: ['tamago','tamago','tamago','tamago','tamago','tamago','tamago','toro'], minThirdWeight: 0 },
+  { name: 'たまごづくし?', pattern: ['tamago','tamago','tamago','toro','tamago','tamago','tamago','tamago'], minThirdWeight: 0 },
+  { name: 'たまごづくし?', pattern: ['tamago','tamago','tamago','tamago','tamago','tamago','tamago','ebi'], minThirdWeight: 0.25 },
+  { name: 'たまごづくし?', pattern: ['tamago','tamago','tamago','ebi','tamago','tamago','tamago','tamago'], minThirdWeight: 0.25 },
+  { name: 'エビづくし?', pattern: ['ebi','ebi','ebi','ebi','ebi','ebi','ebi','toro'], minThirdWeight: 1 },
+  { name: 'エビづくし?', pattern: ['ebi','ebi','ebi','toro','ebi','ebi','ebi','ebi'], minThirdWeight: 1 },
+  { name: 'エビづくし?', pattern: ['ebi','ebi','ebi','ebi','ebi','ebi','ebi','tamago'], minThirdWeight: 1 },
+  { name: 'エビづくし?', pattern: ['ebi','ebi','ebi','tamago','ebi','ebi','ebi','ebi'], minThirdWeight: 1 },
+
+  { name: 'ひだまり', pattern: ['toro','toro','toro','toro','tamago','tamago','tamago','tamago'], minThirdWeight: 0 },
+  { name: 'ひだまり', pattern: ['tamago','tamago','tamago','tamago','toro','toro','toro','toro'], minThirdWeight: 0 },
+  { name: 'ひだまり', pattern: ['toro','tamago','toro','tamago','toro','tamago','toro','tamago'], minThirdWeight: 0 },
+  { name: 'ひだまり', pattern: ['tamago','toro','tamago','toro','tamago','toro','tamago','toro'], minThirdWeight: 0 },
+
+  { name: 'こもれび', pattern: ['toro','toro','toro','toro','ebi','ebi','ebi','ebi'], minThirdWeight: 0.5 },
+  { name: 'こもれび', pattern: ['ebi','ebi','ebi','ebi','toro','toro','toro','toro'], minThirdWeight: 0.5 },
+  { name: 'エビたま', pattern: ['ebi','tamago','ebi','tamago','ebi','tamago','ebi','tamago'], minThirdWeight: 0.5 },
+  { name: 'エビたま', pattern: ['tamago','ebi','tamago','ebi','tamago','ebi','tamago','ebi'], minThirdWeight: 0.5 },
 ];
 
 let presetOrderRef = null; // このステージでプリセットを割り当てた配列そのもの(参照比較で判定に使う)
@@ -458,9 +481,14 @@ let presetOrderName = ''; // その組み合わせの名前(お手本の右上�
 function generateStageOrders() {
   stageOrders = Array.from({ length: STAGE_PLATE_COUNT }, randomOrder);
 
+  // このステージの3種類目の出現重みを満たすプリセットだけを候補にする
+  const thirdWeight = getThirdTypeWeight(stageNumber);
+  const eligiblePresets = PRESET_ORDERS.filter((p) => thirdWeight >= p.minThirdWeight);
+  const presetPool = eligiblePresets.length > 0 ? eligiblePresets : PRESET_ORDERS;
+
   // このステージのどこか1枚を、決まった組み合わせ(プリセット)に差し替える
   const presetIndex = Math.floor(Math.random() * STAGE_PLATE_COUNT);
-  const preset = PRESET_ORDERS[Math.floor(Math.random() * PRESET_ORDERS.length)];
+  const preset = presetPool[Math.floor(Math.random() * presetPool.length)];
   stageOrders[presetIndex] = [...preset.pattern];
   presetOrderRef = stageOrders[presetIndex];
   presetOrderName = preset.name;
@@ -1179,3 +1207,5 @@ Promise.all([
   ...NETA_TYPES.map((type) => loadImage(NETA_SRC[type]).then((img) => { netaImages[type] = img; })),
   ...CORRECT_EFFECT_SRC.map((src, i) => loadImage(src).then((img) => { correctEffectImages[i] = img; })),
 ]).catch((err) => console.error('画像の読み込みに失敗しました', err));
+
+})();
