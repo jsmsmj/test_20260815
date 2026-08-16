@@ -30,7 +30,8 @@ html, body {
 #name-confirm-btn,
 #title-ranking-btn,
 #title-change-name-btn,
-#ranking-back-btn {
+#ranking-back-btn,
+#gameover-rename-btn {
   position: fixed;
   display: none;
   box-sizing: border-box;
@@ -73,7 +74,8 @@ html, body {
 
 /* タイトル画面の副次的なボタン群。主役の「タップ/キー入力でスタート」より控えめな見た目にする */
 #title-ranking-btn,
-#title-change-name-btn {
+#title-change-name-btn,
+#gameover-rename-btn {
   font-size: 13px;
   border: 1px solid #999;
   border-radius: 6px;
@@ -83,7 +85,7 @@ html, body {
 }
 
 #ranking-back-btn {
-  font-size: 13px;
+  font-size: 12px;
   border: 1px solid #999;
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.4);

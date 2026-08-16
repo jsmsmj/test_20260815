@@ -137,6 +137,7 @@ const nameConfirmBtn = document.getElementById('name-confirm-btn');
 const titleRankingBtn = document.getElementById('title-ranking-btn');
 const titleChangeNameBtn = document.getElementById('title-change-name-btn');
 const rankingBackBtn = document.getElementById('ranking-back-btn');
+const gameoverRenameBtn = document.getElementById('gameover-rename-btn');
 
 // デバイスID(初回のみ生成してlocalStorageに保存)。現時点では送信するだけで、特に活用はしていない。
 function getDeviceId() {
@@ -279,8 +280,13 @@ function layoutTitleRankingButton() {
   positionOverCanvas(titleChangeNameBtn, BASE_WIDTH / 2 - 90, BASE_HEIGHT / 2 + 192, 180, 34);
 }
 
+// タイトル画面のボタンと同様、画面下部中央に配置する(「タップ/キー入力でタイトルへ」の下)
 function layoutRankingBackButton() {
-  positionOverCanvas(rankingBackBtn, 15, 15, 64, 30);
+  positionOverCanvas(rankingBackBtn, BASE_WIDTH / 2 - 70, BASE_HEIGHT - 28, 140, 24);
+}
+
+function layoutGameOverRenameButton() {
+  positionOverCanvas(gameoverRenameBtn, BASE_WIDTH / 2 - 90, BASE_HEIGHT / 2 + 185, 180, 34);
 }
 
 // --- タイトル画面の「現在○位」表示(60秒おきに更新) ---
@@ -359,6 +365,9 @@ function resize() {
   }
   if (gamePhase === 'ranking') {
     layoutRankingBackButton();
+  }
+  if (gamePhase === 'gameover') {
+    layoutGameOverRenameButton();
   }
 }
 
@@ -738,6 +747,7 @@ function startGame(now) {
   titleRankingBtn.style.display = 'none';
   titleChangeNameBtn.style.display = 'none';
   rankingBackBtn.style.display = 'none';
+  gameoverRenameBtn.style.display = 'none';
   stopTitleRankRefresh();
   stageNumber = 1;
   timeRemaining = INITIAL_TIME;
@@ -755,6 +765,8 @@ function startGame(now) {
 function startGameOver(now) {
   gamePhase = 'gameover';
   phaseStart = now;
+  layoutGameOverRenameButton();
+  gameoverRenameBtn.style.display = 'block';
   gameOverStats = {
     stage: stageNumber,
     plates: totalPlatesCleared,
@@ -827,12 +839,28 @@ function hideNameEntryElements() {
   nameConfirmBtn.style.display = 'none';
 }
 
+// GAMEOVER画面に戻る(送信済みのgameOverStatsは維持したまま、タップ受付だけ再開する)
+function returnToGameOverScreen(now) {
+  gamePhase = 'gameover';
+  phaseStart = now;
+  layoutGameOverRenameButton();
+  gameoverRenameBtn.style.display = 'block';
+}
+
 function confirmNameEntry() {
   if (gamePhase !== 'nameEntry') return;
   const name = setPlayerName(nameInput.value);
   hideNameEntryElements();
   if (nameEntryReturnPhase === 'title') {
     startTitle(performance.now());
+  } else if (nameEntryReturnPhase === 'gameoverRename') {
+    // 直前のGAMEOVERで送信済みのレコードの名前だけを書き換える(空欄なら変更しない)
+    if (name && lastSubmittedId) {
+      renameRecord(lastSubmittedId, name).catch((err) => {
+        console.error('名前の変更に失敗しました', err);
+      });
+    }
+    returnToGameOverScreen(performance.now());
   } else {
     pendingRenameName = name || null; // 空欄のままならrename不要('NO NAME'のまま)
     startSubmitting(performance.now());
@@ -853,6 +881,13 @@ titleChangeNameBtn.addEventListener('click', () => {
   titleChangeNameBtn.style.display = 'none';
   stopTitleRankRefresh();
   startNameEntry(performance.now(), 'title');
+});
+
+// 直前のGAMEOVERの記録の名前を、いつでも(何度でも)書き換えられるようにする
+gameoverRenameBtn.addEventListener('click', () => {
+  if (gamePhase !== 'gameover') return;
+  gameoverRenameBtn.style.display = 'none';
+  startNameEntry(performance.now(), 'gameoverRename');
 });
 
 // GAMEOVER時点で開始済みの自動送信(gameOverSubmitPromise)の完了を待ち、
@@ -929,8 +964,7 @@ function startRankingScreen(now) {
 rankingBackBtn.addEventListener('click', () => {
   if (gamePhase !== 'ranking' || !rankingReachedFromGameOver) return;
   rankingBackBtn.style.display = 'none';
-  gamePhase = 'gameover';
-  phaseStart = performance.now();
+  returnToGameOverScreen(performance.now());
 });
 
 function startCountdown(now) {
@@ -1118,6 +1152,7 @@ function handleScreenInput() {
 
   if (gamePhase === 'gameover') {
     if (now - phaseStart >= START_IGNORE_DURATION) {
+      gameoverRenameBtn.style.display = 'none';
       if (nameEntryHandledThisGameOver) {
         // 「戻る」で見返しているだけなので、名前入力は行わずランキングへ(送信自体はGAMEOVER表示時点で済んでいる)
         startSubmitting(now);
