@@ -24,14 +24,33 @@ html, body {
   background: #222;
 }
 
-/* 名前入力(ランキング登録)・タイトルのランキングボタン用。JS側でcanvasの表示位置に合わせて配置・表示する */
+/* 名前入力・タイトル/ランキングの各種ボタン用。JS側でcanvasの表示位置に合わせて配置・表示する */
+#name-entry-label,
 #name-input,
 #name-confirm-btn,
-#title-ranking-btn {
+#title-ranking-btn,
+#title-change-name-btn,
+#ranking-back-btn {
   position: fixed;
   display: none;
   box-sizing: border-box;
   z-index: 10;
+}
+
+#name-entry-label {
+  text-align: center;
+  color: #ffffff;
+  font-weight: bold;
+  font-size: 16px;
+  white-space: nowrap;
+}
+
+#name-entry-label span {
+  display: block;
+  margin-top: 4px;
+  font-weight: normal;
+  font-size: 12px;
+  color: #cccccc;
 }
 
 #name-input {
@@ -43,8 +62,7 @@ html, body {
   color: #222222;
 }
 
-#name-confirm-btn,
-#title-ranking-btn {
+#name-confirm-btn {
   border: none;
   border-radius: 6px;
   background: #2ecc71;
@@ -53,7 +71,22 @@ html, body {
   cursor: pointer;
 }
 
-#title-ranking-btn {
-  font-size: 14px;
-  background: #4a90d9;
+/* タイトル画面の副次的なボタン群。主役の「タップ/キー入力でスタート」より控えめな見た目にする */
+#title-ranking-btn,
+#title-change-name-btn {
+  font-size: 13px;
+  border: 1px solid #999;
+  border-radius: 6px;
+  background: transparent;
+  color: #cccccc;
+  cursor: pointer;
+}
+
+#ranking-back-btn {
+  font-size: 13px;
+  border: 1px solid #999;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.4);
+  color: #cccccc;
+  cursor: pointer;
 }

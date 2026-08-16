@@ -131,9 +131,12 @@ const GAME_VERSION = '1.0';
 const RANKING_LIMIT = 10;
 const RANKING_IGNORE_DURATION = 1000; // ms, ランキング画面表示直後にキー/タップ入力を無視する時間
 
+const nameEntryLabel = document.getElementById('name-entry-label');
 const nameInput = document.getElementById('name-input');
 const nameConfirmBtn = document.getElementById('name-confirm-btn');
 const titleRankingBtn = document.getElementById('title-ranking-btn');
+const titleChangeNameBtn = document.getElementById('title-change-name-btn');
+const rankingBackBtn = document.getElementById('ranking-back-btn');
 
 // デバイスID(初回のみ生成してlocalStorageに保存)。現時点では送信するだけで、特に活用はしていない。
 function getDeviceId() {
@@ -161,7 +164,7 @@ async function submitScore({ score, stages, playTime }) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       deviceId: getDeviceId(),
-      name: getPlayerName() || 'noname',
+      name: getPlayerName() || 'NO NAME',
       score,
       stages,
       playTime,
@@ -172,11 +175,56 @@ async function submitScore({ score, stages, playTime }) {
   return res.json(); // { ok, id, rank }
 }
 
+// GAMEOVER直後に'NO NAME'等で送信済みのレコードを、後から入力された名前に書き換える
+async function renameRecord(id, newName) {
+  const res = await fetch(`${RANKING_API_BASE}/api/name`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId: getDeviceId(), id, name: newName }),
+  });
+  if (!res.ok) throw new Error(`rename failed: ${res.status}`);
+  return res.json();
+}
+
 async function fetchRanking(limit) {
   const res = await fetch(`${RANKING_API_BASE}/api/ranking?limit=${limit}`);
   if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
   const data = await res.json();
   return data.ranking;
+}
+
+// 自分の現在の順位を問い合わせる。{ registered: false } または
+// { registered: true, rank, totalPlayers, best, plays, bestPlayId } を返す
+async function fetchMyRank() {
+  const res = await fetch(`${RANKING_API_BASE}/api/me?deviceId=${getDeviceId()}`);
+  if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
+  return res.json();
+}
+
+// --- 自己ベスト・順位変動(localStorageで管理) ---
+function getBestScore() {
+  const v = localStorage.getItem('bestScore');
+  return v === null ? 0 : Number(v);
+}
+
+// 記録を更新していればlocalStorageに保存し、trueを返す
+function updateBestScore(score) {
+  if (score > getBestScore()) {
+    localStorage.setItem('bestScore', String(score));
+    return true;
+  }
+  return false;
+}
+
+// 「直前のプレイ時点の順位」。ゲームをプレイして送信した時だけ更新する(タイトルの定期取得では更新しない)
+function getLastKnownRank() {
+  const v = localStorage.getItem('lastKnownRank');
+  return v === null ? null : Number(v);
+}
+
+function setLastKnownRank(rank) {
+  if (rank === null || rank === undefined) return;
+  localStorage.setItem('lastKnownRank', String(rank));
 }
 
 // canvas上の座標(BASE_WIDTH/BASE_HEIGHT基準)に、実画面上のposition:fixed要素を重ねて配置する
@@ -189,13 +237,91 @@ function positionOverCanvas(el, x, y, w, h) {
   el.style.height = `${h * scale}px`;
 }
 
+// 名前入力欄はcanvas座標ではなく、実際に見えている範囲(window.visualViewport)基準で配置する。
+// iOS Safariはソフトキーボード表示時にwindow.innerHeightを縮めないことが多く、
+// canvas基準(position:fixedの座標系)のままだとキーボードの下(画面外)に入力欄が来てしまうため。
 function layoutNameEntryElements() {
-  positionOverCanvas(nameInput, BASE_WIDTH / 2 - 110, BASE_HEIGHT / 2 - 20, 150, 40);
-  positionOverCanvas(nameConfirmBtn, BASE_WIDTH / 2 + 50, BASE_HEIGHT / 2 - 20, 60, 40);
+  const vv = window.visualViewport;
+  const visibleWidth = vv ? vv.width : window.innerWidth;
+  const visibleHeight = vv ? vv.height : window.innerHeight;
+  const offsetLeft = vv ? vv.offsetLeft : 0;
+  const offsetTop = vv ? vv.offsetTop : 0;
+
+  const inputWidth = 150;
+  const inputHeight = 40;
+  const btnWidth = 60;
+  const gap = 10;
+  const totalWidth = inputWidth + gap + btnWidth;
+
+  // 見えている範囲の上寄り(キーボードが出ても隠れない位置)に配置する
+  const left = offsetLeft + (visibleWidth - totalWidth) / 2;
+  const top = offsetTop + visibleHeight * 0.35;
+
+  nameInput.style.left = `${left}px`;
+  nameInput.style.top = `${top}px`;
+  nameInput.style.width = `${inputWidth}px`;
+  nameInput.style.height = `${inputHeight}px`;
+
+  nameConfirmBtn.style.left = `${left + inputWidth + gap}px`;
+  nameConfirmBtn.style.top = `${top}px`;
+  nameConfirmBtn.style.width = `${btnWidth}px`;
+  nameConfirmBtn.style.height = `${inputHeight}px`;
+
+  // 見出しも入力欄と同じ実ビューポート基準で、入力欄のすぐ上に配置する
+  const labelWidth = 260;
+  nameEntryLabel.style.left = `${offsetLeft + (visibleWidth - labelWidth) / 2}px`;
+  nameEntryLabel.style.top = `${top - 56}px`;
+  nameEntryLabel.style.width = `${labelWidth}px`;
 }
 
 function layoutTitleRankingButton() {
-  positionOverCanvas(titleRankingBtn, BASE_WIDTH / 2 - 90, BASE_HEIGHT / 2 + 145, 180, 40);
+  positionOverCanvas(titleRankingBtn, BASE_WIDTH / 2 - 90, BASE_HEIGHT / 2 + 150, 180, 34);
+  positionOverCanvas(titleChangeNameBtn, BASE_WIDTH / 2 - 90, BASE_HEIGHT / 2 + 192, 180, 34);
+}
+
+function layoutRankingBackButton() {
+  positionOverCanvas(rankingBackBtn, 15, 15, 64, 30);
+}
+
+// --- タイトル画面の「現在○位」表示(60秒おきに更新) ---
+const TITLE_RANK_REFRESH_INTERVAL = 60000; // ms
+let titleRankText = '';
+let titleRankArrow = ''; // '↑' | '↓' | ''
+let titleRankRefreshTimer = null;
+let sessionStartRank = null; // ゲーム開始時点の順位(プレイ後の順位変動判定に使う。nullなら比較なし)
+
+function refreshTitleRank() {
+  fetchMyRank()
+    .then((data) => {
+      if (!data.registered) {
+        titleRankText = 'まだ記録がありません';
+        titleRankArrow = '';
+        sessionStartRank = null;
+        return;
+      }
+      const newRank = data.rank;
+      const baseline = getLastKnownRank(); // 直前のプレイ時点の順位(ここでは更新しない)
+      titleRankArrow = baseline !== null && newRank !== baseline ? (newRank < baseline ? '↑' : '↓') : '';
+      titleRankText = `現在 ${newRank}位`;
+      sessionStartRank = newRank; // 次にプレイする時の「プレイ前の順位」として保持
+    })
+    .catch((err) => {
+      console.error('順位の取得に失敗しました', err);
+    });
+}
+
+function startTitleRankRefresh() {
+  refreshTitleRank();
+  if (titleRankRefreshTimer === null) {
+    titleRankRefreshTimer = setInterval(refreshTitleRank, TITLE_RANK_REFRESH_INTERVAL);
+  }
+}
+
+function stopTitleRankRefresh() {
+  if (titleRankRefreshTimer !== null) {
+    clearInterval(titleRankRefreshTimer);
+    titleRankRefreshTimer = null;
+  }
 }
 
 function loadImage(src) {
@@ -230,6 +356,9 @@ function resize() {
   }
   if (gamePhase === 'title') {
     layoutTitleRankingButton();
+  }
+  if (gamePhase === 'ranking') {
+    layoutRankingBackButton();
   }
 }
 
@@ -495,6 +624,17 @@ let gameOverStats = { stage: 0, plates: 0, pieces: 0, miss: 0, maxCombo: 0, noMi
 let rankingList = []; // fetchRankingの結果({rank, name, score}の配列)
 let ownRank = null; // 直近の送信でのランキング順位(nullなら未送信/失敗)
 let rankingErrorMessage = ''; // 送信/取得に失敗した場合のメッセージ
+let isNewBest = false; // 今回のプレイが自己ベストを更新したか
+let rankChangeArrow = ''; // プレイ前後の順位変動('↑' | '↓' | '')
+let rankingReachedFromGameOver = false; // 今のランキング画面がプレイ後の遷移で来たものか(「戻る」ボタンの表示判定用)
+
+// --- GAMEOVER直後の自動送信・後からの名前変更 ---
+// 離脱による記録消失を防ぐため、GAMEOVER画面が表示された時点で名前未入力でも(NO NAMEで)即送信する。
+// あとから名前入力があった場合は、このIDを使ってレコードの名前だけを書き換える。
+let gameOverSubmitPromise = null; // GAMEOVER時点の自動送信のPromise(完了待ちに使う)
+let lastSubmittedId = null; // 自動送信で得られたレコードID(renameRecordに使う。失敗時はnull)
+let pendingRenameName = null; // 名前入力で確定された、送信後に反映すべき名前(null/空なら変更不要)
+let nameEntryHandledThisGameOver = false; // このGAMEOVERで名前入力/送信待ちの工程を既に済ませたか(「戻る」から再度進んだ時に使う)
 
 // --- 制限時間 ---
 const INITIAL_TIME = 30; // 秒、ゲーム開始時の残り時間
@@ -590,10 +730,15 @@ function startTitle(now) {
   phaseStart = now;
   layoutTitleRankingButton();
   titleRankingBtn.style.display = 'block';
+  titleChangeNameBtn.style.display = 'block';
+  startTitleRankRefresh();
 }
 
 function startGame(now) {
   titleRankingBtn.style.display = 'none';
+  titleChangeNameBtn.style.display = 'none';
+  rankingBackBtn.style.display = 'none';
+  stopTitleRankRefresh();
   stageNumber = 1;
   timeRemaining = INITIAL_TIME;
   maxStreak = 0;
@@ -620,28 +765,78 @@ function startGameOver(now) {
     maxNoMissStreak: maxNoMissPlateStreak,
     playTime: now - sessionStartTime,
   };
+
+  // 自己ベストはローカルだけで完結する判定なので、通信結果を待たずに確定させる
+  isNewBest = updateBestScore(gameOverStats.pieces);
+
+  // 新しいゲームオーバーなので、前回分の状態をリセット
+  lastSubmittedId = null;
+  pendingRenameName = null;
+  nameEntryHandledThisGameOver = false;
+  rankingErrorMessage = '';
+  ownRank = null;
+  rankChangeArrow = '';
+
+  // 名前入力を待たず、この時点で(未入力なら'NO NAME'で)即送信する。
+  // こうしないと、名前を入れる前に離脱された場合に記録が一切残らないため。
+  gameOverSubmitPromise = submitScore({
+    score: gameOverStats.pieces,
+    stages: gameOverStats.stage,
+    playTime: Math.round(gameOverStats.playTime),
+  })
+    .then((result) => {
+      lastSubmittedId = result.id;
+      // /api/scoreのrankは「今回送信したスコアそのもの」の順位であり、
+      // 自己ベストを更新できなかった場合は実際の順位と食い違う。
+      // タイトル画面の「現在○位」と同じ、自己ベストに基づく順位(/api/me)を正として使う。
+      return fetchMyRank();
+    })
+    .then((data) => {
+      if (!data.registered) return; // 送信直後なので通常ここには来ないはずだが念のため
+      ownRank = data.rank;
+
+      if (sessionStartRank !== null && ownRank !== sessionStartRank) {
+        rankChangeArrow = ownRank < sessionStartRank ? '↑' : '↓';
+      }
+      setLastKnownRank(ownRank); // 次にタイトルに戻った時の比較基準を更新
+    })
+    .catch((err) => {
+      console.error('スコア送信に失敗しました', err);
+      rankingErrorMessage = 'ランキングとの通信に失敗しました';
+    });
 }
 
-function startNameEntry(now) {
+// returnPhase: 確定後にどこへ進むか。'submitting'(ゲームオーバー経由、スコア送信へ) | 'title'(タイトルの「名前を変える」経由)
+let nameEntryReturnPhase = 'submitting';
+
+function startNameEntry(now, returnPhase) {
   gamePhase = 'nameEntry';
   phaseStart = now;
+  nameEntryReturnPhase = returnPhase || 'submitting';
   nameInput.value = getPlayerName();
   layoutNameEntryElements();
+  nameEntryLabel.style.display = 'block';
   nameInput.style.display = 'block';
   nameConfirmBtn.style.display = 'block';
   nameInput.focus();
 }
 
 function hideNameEntryElements() {
+  nameEntryLabel.style.display = 'none';
   nameInput.style.display = 'none';
   nameConfirmBtn.style.display = 'none';
 }
 
 function confirmNameEntry() {
   if (gamePhase !== 'nameEntry') return;
-  setPlayerName(nameInput.value);
+  const name = setPlayerName(nameInput.value);
   hideNameEntryElements();
-  startSubmitting(performance.now());
+  if (nameEntryReturnPhase === 'title') {
+    startTitle(performance.now());
+  } else {
+    pendingRenameName = name || null; // 空欄のままならrename不要('NO NAME'のまま)
+    startSubmitting(performance.now());
+  }
 }
 
 nameConfirmBtn.addEventListener('click', confirmNameEntry);
@@ -652,29 +847,39 @@ nameInput.addEventListener('keydown', (e) => {
   }
 });
 
+titleChangeNameBtn.addEventListener('click', () => {
+  if (gamePhase !== 'title') return;
+  titleRankingBtn.style.display = 'none';
+  titleChangeNameBtn.style.display = 'none';
+  stopTitleRankRefresh();
+  startNameEntry(performance.now(), 'title');
+});
+
+// GAMEOVER時点で開始済みの自動送信(gameOverSubmitPromise)の完了を待ち、
+// 必要なら名前変更(rename)を反映してからランキングを取得して表示する。
 function startSubmitting(now) {
   gamePhase = 'submitting';
   phaseStart = now;
-  rankingErrorMessage = '';
+  rankingReachedFromGameOver = true;
 
-  submitScore({
-    score: gameOverStats.pieces,
-    stages: gameOverStats.stage,
-    playTime: Math.round(gameOverStats.playTime),
-  })
-    .then((result) => {
-      ownRank = result.rank;
-      return fetchRanking(RANKING_LIMIT);
+  gameOverSubmitPromise
+    .then(() => {
+      // 自動送信が成功しており、かつ名前入力で新しい名前が確定していればrenameする
+      if (lastSubmittedId && pendingRenameName) {
+        const nameToApply = pendingRenameName;
+        pendingRenameName = null;
+        return renameRecord(lastSubmittedId, nameToApply).catch((err) => {
+          console.error('名前の変更に失敗しました', err);
+          // renameに失敗しても、送信済みの記録自体(NO NAME)は残っているのでエラー扱いにはしない
+        });
+      }
     })
+    .then(() => fetchRanking(RANKING_LIMIT).catch((err) => {
+      console.error('ランキング一覧の取得に失敗しました', err);
+      return [];
+    }))
     .then((list) => {
-      rankingList = list;
-      startRankingScreen(performance.now());
-    })
-    .catch((err) => {
-      console.error('ランキング送信/取得に失敗しました', err);
-      ownRank = null;
-      rankingList = [];
-      rankingErrorMessage = 'ランキングとの通信に失敗しました';
+      rankingList = list || [];
       startRankingScreen(performance.now());
     });
 }
@@ -685,6 +890,9 @@ function startViewRankingOnly(now) {
   phaseStart = now;
   rankingErrorMessage = '';
   ownRank = null;
+  isNewBest = false; // プレイしていないので自己ベスト・順位変動は対象外
+  rankChangeArrow = '';
+  rankingReachedFromGameOver = false;
 
   fetchRanking(RANKING_LIMIT)
     .then((list) => {
@@ -702,13 +910,28 @@ function startViewRankingOnly(now) {
 titleRankingBtn.addEventListener('click', () => {
   if (gamePhase !== 'title') return;
   titleRankingBtn.style.display = 'none';
+  stopTitleRankRefresh();
   startViewRankingOnly(performance.now());
 });
 
 function startRankingScreen(now) {
   gamePhase = 'ranking';
   phaseStart = now;
+
+  if (rankingReachedFromGameOver) {
+    layoutRankingBackButton();
+    rankingBackBtn.style.display = 'block';
+  } else {
+    rankingBackBtn.style.display = 'none';
+  }
 }
+
+rankingBackBtn.addEventListener('click', () => {
+  if (gamePhase !== 'ranking' || !rankingReachedFromGameOver) return;
+  rankingBackBtn.style.display = 'none';
+  gamePhase = 'gameover';
+  phaseStart = performance.now();
+});
 
 function startCountdown(now) {
   gamePhase = 'countdown';
@@ -895,7 +1118,18 @@ function handleScreenInput() {
 
   if (gamePhase === 'gameover') {
     if (now - phaseStart >= START_IGNORE_DURATION) {
-      startNameEntry(now);
+      if (nameEntryHandledThisGameOver) {
+        // 「戻る」で見返しているだけなので、名前入力は行わずランキングへ(送信自体はGAMEOVER表示時点で済んでいる)
+        startSubmitting(now);
+      } else if (getPlayerName()) {
+        // 名前は登録済みなので入力を省略。送信(GAMEOVER表示時点で自動送信済み)の完了を待つだけ
+        nameEntryHandledThisGameOver = true;
+        startSubmitting(now);
+      } else {
+        // 初回のみ名前を聞く
+        nameEntryHandledThisGameOver = true;
+        startNameEntry(now);
+      }
     }
     return true;
   }
@@ -907,6 +1141,7 @@ function handleScreenInput() {
 
   if (gamePhase === 'ranking') {
     if (now - phaseStart >= RANKING_IGNORE_DURATION) {
+      rankingBackBtn.style.display = 'none';
       startTitle(now);
     }
     return true;
@@ -1214,6 +1449,13 @@ function drawTitleOverlay() {
     ctx.fillText(line, BASE_WIDTH / 2, BASE_HEIGHT / 2 - 70 + i * 26);
   });
 
+  if (titleRankText) {
+    ctx.font = 'bold 16px sans-serif';
+    ctx.fillStyle = '#ffd700';
+    const arrowSuffix = titleRankArrow ? `  ${titleRankArrow}` : '';
+    ctx.fillText(`${titleRankText}${arrowSuffix}`, BASE_WIDTH / 2, BASE_HEIGHT / 2 + 65);
+  }
+
   ctx.font = '16px sans-serif';
   ctx.fillStyle = '#cccccc';
   ctx.fillText('タップ / キー入力でスタート', BASE_WIDTH / 2, BASE_HEIGHT / 2 + 120);
@@ -1260,15 +1502,6 @@ function drawNameEntryOverlay() {
   ctx.save();
   ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
   ctx.fillRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
-
-  ctx.fillStyle = '#ffffff';
-  ctx.textAlign = 'center';
-  ctx.font = 'bold 22px sans-serif';
-  ctx.fillText('ランキングに登録する名前', BASE_WIDTH / 2, BASE_HEIGHT / 2 - 60);
-
-  ctx.font = '14px sans-serif';
-  ctx.fillStyle = '#cccccc';
-  ctx.fillText('(空欄のままでもOK)', BASE_WIDTH / 2, BASE_HEIGHT / 2 - 35);
   ctx.restore();
 }
 
@@ -1289,7 +1522,7 @@ function drawRankingOverlay() {
   if (gamePhase !== 'ranking') return;
 
   ctx.save();
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
   ctx.fillRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
 
   ctx.fillStyle = '#ffffff';
@@ -1301,7 +1534,17 @@ function drawRankingOverlay() {
   ctx.fillStyle = '#999999';
   ctx.fillText('※ 各プレイヤーのベストスコアを表示', BASE_WIDTH / 2, 86);
 
-  const startY = 122;
+  // 自己ベスト更新・順位変動(どちらもなければ何も表示しない)
+  const infoParts = [];
+  if (isNewBest) infoParts.push('自己ベスト更新!');
+  if (rankChangeArrow) infoParts.push(`順位 ${rankChangeArrow}`);
+  if (infoParts.length > 0) {
+    ctx.font = 'bold 14px sans-serif';
+    ctx.fillStyle = '#ffd700';
+    ctx.fillText(infoParts.join('  '), BASE_WIDTH / 2, 106);
+  }
+
+  const startY = 132;
   const rowHeight = 38;
 
   if (rankingErrorMessage) {
@@ -1512,3 +1755,41 @@ Promise.all([
 ]).catch((err) => console.error('画像の読み込みに失敗しました', err));
 
 })();
+
+
+// ============================================================
+//  POST /api/name   { deviceId, name }
+// ============================================================
+
+async function updateName(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json(request, { error: 'invalid json' }, 400);
+  }
+
+  const { deviceId, name } = body;
+
+  if (!UUID_RE.test(String(deviceId ?? ''))) {
+    return json(request, { error: 'invalid deviceId' }, 400);
+  }
+
+  const cleanName = String(name ?? '').trim().slice(0, 20);
+  if (!cleanName) {
+    return json(request, { error: 'empty name' }, 400);
+  }
+
+  const result = await env.DB.prepare(
+    `UPDATE scores SET name = ? WHERE device_id = ?`
+  )
+    .bind(cleanName, deviceId)
+    .run();
+
+  return json(request, {
+    ok: true,
+    name: cleanName,
+    updated: result.meta.changes,
+  });
+}
+
