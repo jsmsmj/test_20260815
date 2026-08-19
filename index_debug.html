@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Sample Game (Debug)</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  #debug-panel {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    z-index: 100;
+    background: rgba(0, 0, 0, 0.75);
+    color: #fff;
+    padding: 8px 10px;
+    border: 1px solid #999;
+    border-radius: 6px;
+    font-family: sans-serif;
+    font-size: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  #debug-panel label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  #debug-panel button {
+    font-size: 12px;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<div id="game-container">
+  <canvas id="game-canvas"></canvas>
+</div>
+<div id="name-entry-label">ランキングに登録する名前<span>(空欄のままでもOK)</span></div>
+<input id="name-input" type="text" maxlength="20" placeholder="名前(空欄可)" autocomplete="off" />
+<button id="name-confirm-btn" type="button">OK</button>
+<div id="debug-panel">
+  <label><input type="checkbox" id="debug-force-error" /> 通信を強制エラーにする</label>
+  <label><input type="checkbox" id="debug-force-best-update" /> 自己ベスト更新中を強制する</label>
+  <button id="debug-goto-gameover" type="button">ゲームオーバー画面へ</button>
+  <button id="debug-goto-cleared" type="button">ステージクリア画面へ</button>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/howler@2.2.4/dist/howler.min.js"></script>
+<script type="module" src="main.js"></script>
+<script type="module">
+  import { DebugFlags } from './debugFlags.js';
+
+  const errorCheckbox = document.getElementById('debug-force-error');
+  errorCheckbox.addEventListener('change', () => {
+    DebugFlags.forceNetworkError = errorCheckbox.checked;
+  });
+
+  const bestUpdateCheckbox = document.getElementById('debug-force-best-update');
+  bestUpdateCheckbox.addEventListener('change', () => {
+    DebugFlags.forceBestUpdate = bestUpdateCheckbox.checked;
+  });
+
+  document.getElementById('debug-goto-gameover').addEventListener('click', () => {
+    DebugFlags.forceGameOver?.();
+  });
+  document.getElementById('debug-goto-cleared').addEventListener('click', () => {
+    DebugFlags.forceCleared?.();
+  });
+</script>
+</body>
+</html>

@@ -24,14 +24,10 @@ html, body {
   background: #222;
 }
 
-/* 名前入力・タイトル/ランキングの各種ボタン用。JS側でcanvasの表示位置に合わせて配置・表示する */
+/* 名前入力用。JS側でcanvasの表示位置に合わせて配置・表示する */
 #name-entry-label,
 #name-input,
-#name-confirm-btn,
-#title-ranking-btn,
-#title-change-name-btn,
-#ranking-back-btn,
-#gameover-rename-btn {
+#name-confirm-btn {
   position: fixed;
   display: none;
   box-sizing: border-box;
@@ -72,23 +68,3 @@ html, body {
   cursor: pointer;
 }
 
-/* タイトル画面の副次的なボタン群。主役の「タップ/キー入力でスタート」より控えめな見た目にする */
-#title-ranking-btn,
-#title-change-name-btn,
-#gameover-rename-btn {
-  font-size: 13px;
-  border: 1px solid #999;
-  border-radius: 6px;
-  background: transparent;
-  color: #cccccc;
-  cursor: pointer;
-}
-
-#ranking-back-btn {
-  font-size: 12px;
-  border: 1px solid #999;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.4);
-  color: #cccccc;
-  cursor: pointer;
-}
